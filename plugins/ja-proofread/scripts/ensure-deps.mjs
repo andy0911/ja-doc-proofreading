@@ -5,7 +5,7 @@
 //   --force  入れるのに失敗したばかりでも、待たずにもう一度試す
 // 入れるのに失敗したら、依存の置き場に印（.failed）を書き、10分は試さない（校正のたびに npm を待たせないため）
 import { copyFileSync, writeFileSync, existsSync, mkdirSync, rmSync, statSync, openSync, closeSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import { ROOT, depsDir, depsHash, depsReady } from "./lib.mjs";
 
@@ -77,7 +77,8 @@ try {
   log("ja-proofread: textlint とルールを入れています（初回のみ、30秒ほど）");
   const npm = process.platform === "win32" ? "npm.cmd" : "npm";
   // ロックファイルの版をそのまま入れる。パッケージのインストールスクリプトは動かさない
-  const common = ["--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error", "--fetch-retries=1", "--fetch-timeout=20000", "--update-notifier=false"];
+  // npm のキャッシュは依存の置き場の隣に置く（HOME に書けないと ~/.npm が作れず、入れられないため）
+  const common = ["--cache", join(dirname(dir), "npm-cache"), "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error", "--fetch-retries=1", "--fetch-timeout=20000", "--update-notifier=false"];
   const r = spawnSync(npm, [hasLock ? "ci" : "install", ...common], { cwd: dir, encoding: "utf8", shell: process.platform === "win32", timeout: 280000, killSignal: "SIGKILL" });
   if (r.error || r.status !== 0) {
     const errLines = (r.stderr || "").split("\n").filter((l) => /^npm (error|ERR!)/.test(l) && !/complete log/.test(l));

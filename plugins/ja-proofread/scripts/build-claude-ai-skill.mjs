@@ -27,7 +27,7 @@ const CHANGELOG = join(REPO, "CHANGELOG.md");
 export const SKILL_NAME = "ja-proofread";
 // スキルでは使わないスクリプト（同梱・kit・一式・このスクリプト、フック）
 const SKIP_SCRIPTS = new Set(["build-setup.mjs", "build-claude-ai-skill.mjs", "install-into-project.mjs", "install-project-kit.mjs", "hook-post-edit.mjs"]);
-const DIR = "${CLAUDE_SKILL_DIR}";
+const DIR = "$D";
 const BEGIN_LINE = "----- 貼る部分ここから（この行は貼らない） -----";
 const END_LINE = "----- 貼る部分ここまで（この行は貼らない） -----";
 const END_MARK = "（ja-proofread の指示はここまで）";
@@ -47,34 +47,40 @@ function tracked() {
   return files.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
-// SKILL.md（スキルの入口）
+// SKILL.md（スキルの入口）。claude.ai のチャットで ${CLAUDE_SKILL_DIR} が置き換わるかは分からないので、
+// 最初の手順でスキルのフォルダを D に決め（置き換わらなければ、シェルの変数として空になるので、印の skill.json を探す）、そのあとのコマンドは $D を使う
+const FIND_D = `D="\${CLAUDE_SKILL_DIR}"; [ -f "$D/scripts/proofread.mjs" ] || D="$(dirname "$(find / -path '*/ja-proofread/skill.json' -not -path '/proc/*' 2>/dev/null | head -1)")"; [ -f "$D/scripts/proofread.mjs" ] && echo "D=$D" && node -v`;
 function skillMd(v) {
   return `---
 name: ${SKILL_NAME}
-description: 日本語の文書（報告・説明資料・お知らせ・メール・スライドの原稿など）を書くとき、直すとき、校正するときに使う。書いた文書をファイルに保存し、textlint と「AIの文章に出やすい型」の台帳で機械チェックして、「必ず直す」の指摘を直してから渡す。「校正して」「AIっぽさを消して」「読みやすいか見て」「出す前に見て」と頼まれたときにも使う。
+description: プロジェクトの指示で日本語の文書の校正を頼まれているとき、または本人が日本語の文書の校正を頼んだとき（「校正して」「AIっぽさを消して」「読みやすいか見て」「出す前に見て」など）に使う。文書をファイルに保存し、textlint と「AIの文章に出やすい型」の台帳で機械チェックして、「必ず直す」の指摘を直してから渡す。依存を入れるのに数十秒かかるので、頼まれていない会話では使わない。
 ---
 
 # 日本語の文書の校正（ja-proofread v${v}、claude.ai のチャット向け）
 
-このスキルのフォルダ（この SKILL.md があるフォルダ）に、校正のスクリプト（\`scripts/\`）、台帳と表記の辞書（\`data/\`）、手順の本文（\`references/\`）があります。下では、このフォルダを \`${DIR}\` と書きます。置き換わっていないときは、この SKILL.md があるフォルダのパスに読み替えます。スキルのフォルダには書き込みません（書けないことがあるため）。依存と記録は、書き込める場所（\`~/.cache/ja-proofread\`、書けなければ一時ディレクトリの下）にスクリプトが置きます。環境変数 \`JA_PROOFREAD_DATA\` は付けません。
+このスキルのフォルダ（この SKILL.md があるフォルダ）に、校正のスクリプト（\`scripts/\`）、台帳と表記の辞書（\`data/\`）、手順の本文（\`references/\`）があります。下と references/ では、このフォルダを \`${DIR}\` と書きます。スキルのフォルダには書き込みません（書けないことがあるため）。依存と記録は、書き込める場所（\`~/.cache/ja-proofread\`、書けなければ一時ディレクトリの下）にスクリプトが置きます。環境変数 \`JA_PROOFREAD_DATA\` は付けません。
 
 ## 毎回の校正（日本語の文書を書いた・直したら）
 
-1. \`node -v\` で Node が動くか確かめます。
+1. スキルのフォルダを決め、Node が動くか確かめます。次を、そのまま実行します。
+   \`\`\`bash
+   ${FIND_D}
+   \`\`\`
+   \`D=…\` の行が出たら、そのパスがスキルのフォルダです。下のコマンドの \`${DIR}\` は、毎回、先頭に \`D="<そのパス>";\` を付けて実行します（コマンドごとにシェルが変わっても動くように）。\`D=…\` の行が出ないときは、スキルのフォルダが見つからないので、校正したことにせず、校正できなかったと伝えます。\`node -v\` が失敗したときは、下の「コード実行や Node が使えないとき」に従います。
 2. 書いた文書を、作業用のファイル（例：\`/tmp/ja-proofread-work/文書.md\`）に Markdown で保存します。アーティファクトや返答で渡す文書は、その本文を保存します。スライドは、1枚を \`## 番号 見出し\` の節にして書き出します。
 3. 依存を入れてから校正します。依存は会話の最初だけ数十秒かかります。スライドや体言止めの多い資料は、\`--profile slide\` をファイルの前に付けます。
    \`\`\`bash
-   node "${DIR}/scripts/ensure-deps.mjs" && node "${DIR}/scripts/proofread.mjs" /tmp/ja-proofread-work/文書.md
+   D="<1のパス>"; node "${DIR}/scripts/ensure-deps.mjs" && node "${DIR}/scripts/proofread.mjs" /tmp/ja-proofread-work/文書.md
    \`\`\`
 4. 「必ず」の指摘を直し、元の文書（アーティファクト・ファイル・返答）にも同じ直しを入れて、3の proofread をもう一度実行します。誤検知と判断したもの以外の「必ず」が0件になってから渡します。誤検知と判断したものは直さず、渡すときにそう書きます。「直したい」は文脈を見て直します。
 5. 渡すときに、校正の件数（必ず・直したい・参考、直す前 → 直した後）を1行で伝えます。
 
 「textlint が動かなかった」と出たら、表記と文法の指摘は確かめられていないと伝えます。
 
-## Node・npm が無いとき、ネットワークに出られないとき
+## コード実行や Node が使えないとき、依存が入らないとき
 
-- Node はあるが依存が入らない（npm が無い、registry.npmjs.org に届かない）：proofread.mjs はそのまま動き、構成の型と件数で数える型だけを点検します。textlint は動かなかったと伝えます。
-- Node が無い（コード実行が使えないときも）：\`${DIR}/data/ledger.json\`（台帳の型）と \`${DIR}/data/prh.yml\`（表記の辞書）を読み、文書をその型と表記に照らして点検します。textlint もスクリプトも動かなかったと伝えます。
+- Node はあるが依存が入らない（npm が無い、registry.npmjs.org に届かない）：proofread.mjs はそのまま動き、構成の型と件数で数える型だけを点検します。件数を伝えるときに、textlint は動かなかったと書きます。
+- コード実行や Node が使えない：校正はできません。校正したとは書かず、校正できなかった（textlint もスクリプトも動かなかった）と伝えます。代わりに、\`${DIR}/data/ledger.json\`（台帳の型）と \`${DIR}/data/prh.yml\`（表記の辞書）を読んで文書を点検してもかまいませんが、それは「目で見た点検」として伝え、校正の件数は書きません。
 
 ## 書く前（新しく書くとき）
 
@@ -90,7 +96,7 @@ description: 日本語の文書（報告・説明資料・お知らせ・メー�
 
 ## 記録
 
-検出と誤検知の記録は \`~/.cache/ja-proofread\`（書けなければ一時ディレクトリの下の \`ja-proofread-cache\`）に残ります。会話をまたいで残るかは分からないので、残らない前提で使います。
+検出と誤検知の記録は \`~/.cache/ja-proofread\`（書けなければ一時ディレクトリの下の、自分だけが使える \`ja-proofread-cache-<uid>\`）に残ります。会話をまたいで残るかは分からないので、残らない前提で使います。
 `;
 }
 
@@ -104,8 +110,8 @@ function pasteText(v) {
 - 手順：ja-proofread スキルの SKILL.md の「毎回の校正」に従います。文書をファイルに保存し、ensure-deps と proofread を実行し、誤検知と判断したもの以外の「必ず」を直してから渡します。渡すときに、校正の件数（必ず・直したい・参考）を1行で書きます。
 - 新しく書く前は、スキルの references/write.md を読み、台帳の型を避けて書きます。
 - 「校正して」「出す前に見て」と頼まれたときだけ、references/proofread.md の仕上げ（構成の型の点検と読者役）を、同じ会話の中で行います。
-- ja-proofread スキルが見つからない、コード実行が使えないときは、校正したことにせず、校正できなかったと伝えます。
-- Node が動かない、依存が入らないときは、スキルの説明どおり、できた点検だけを行い、textlint は動かなかったと伝えます。
+- ja-proofread スキルが見つからない、コード実行や Node が使えないときは、校正したとは書かず、校正できなかった（textlint が動かなかった）と伝えます。スキルの台帳と辞書を読んで点検してもかまいませんが、校正の件数は書きません。
+- 依存が入らず textlint だけが動かないときは、できた点検の件数を書き、textlint は動かなかったと添えます。
 - 新しい型の候補を Notion の候補一覧に登録するのは、本人が頼んだときだけです。
 
 ${END_MARK}`;
@@ -122,12 +128,32 @@ ${END_LINE}
 `;
 }
 
+const DIR_NOTE = `この文書の \`${DIR}\` は、このスキルのフォルダ（SKILL.md があるフォルダ）です。SKILL.md の「毎回の校正」の1で決めたパスを使い、コマンドは先頭に \`D="<そのパス>";\` を付けて実行します。`;
+
+// 役の指示（agents/）を、チャット向けにする。Claude Code 向けの frontmatter（name・description・tools）は消す
+function chatAgent(name, src) {
+  const body = src.replace(/^---\n[\s\S]*?\n---\n\n?/, "");
+  if (/^---\n/.test(body) || /\btools:/.test(body.split("\n").slice(0, 3).join("\n"))) throw new Error(`references/agents/${name} の frontmatter を外せませんでした`);
+  return `<!-- ja-proofread の役の指示（${name.replace(/\.md$/, "")}）。チャットでは、同じ会話の中でこの指示を読み、書き手の立場を離れて行う。別の会話に貼って読ませると独立性が上がる。 -->\n\n` + body;
+}
+
+// templates/ のうち、チャットで読み替えが要るもの
+function chatTemplate(p, buf) {
+  if (p !== "templates/reader-test.md") return buf;
+  const src = buf.toString("utf8");
+  const re = /2〜3体を、別々の `fresh-eyes-reader` サブエージェントとして起動します（[^）]*）。/;
+  if (!re.test(src)) throw new Error("templates/reader-test.md の、読者役を起動する文が見つかりません（チャット向けに書き直せません）");
+  const out = src.replace(re, `読者役を2〜3人分、1人ずつ順に行います。チャットではサブエージェントを使えないので、同じ会話の中で、\`${DIR}/references/agents/fresh-eyes-reader.md\` を役の指示として読み、書き手の立場を離れて読みます（${DIR} はスキルのフォルダ。対象の文書と役の指示を別の会話に貼って読ませると、独立性が上がります）。`);
+  if (/サブエージェントとして起動|ja-proofread:/.test(out)) throw new Error("templates/reader-test.md に、サブエージェントの名前が残っています");
+  return Buffer.from(out, "utf8");
+}
+
 // 手順の本文（プラグインのスキル）を、チャット向けに書き直す
 function chatReference(name, src) {
   const refOf = (n) => `\`${DIR}/references/${n}.md\` の手順`;
   const roleRef = (n) => `\`${n}\` の役（\`${DIR}/references/agents/${n}.md\`）`;
-  const roleNote = `チャットでの読み替え：チャットではサブエージェントを使えません。下で「サブエージェント」「起動」「〜体」とある役は、同じ会話の中で、その役の指示（\`${DIR}/references/agents/\` の下の .md の本文。先頭の --- で囲んだ部分は除く）を読み、書き手の立場を離れて、1役ずつ順に行います。渡すものは、役の指示に書いたものだけにします。書いた本人と同じ会話なので独立性は低くなります。本人には「対象の文書と役の指示を別の会話に貼って読ませると、独立性が上がる」と伝えます。`;
-  const dataNote = "検出と誤検知の記録は `~/.cache/ja-proofread`（書けなければ一時ディレクトリの下の `ja-proofread-cache`）に残ります。会話をまたいで残るかは分からないので、残らない前提で使います。環境変数 `JA_PROOFREAD_DATA` は付けません。";
+  const roleNote = `チャットでの読み替え：チャットではサブエージェントを使えません。下で「サブエージェント」「起動」「〜体」とある役は、同じ会話の中で、その役の指示（\`${DIR}/references/agents/\` の下の .md）を読み、書き手の立場を離れて、1役ずつ順に行います。渡すものは、役の指示に書いたものだけにします。書いた本人と同じ会話なので独立性は低くなります。本人には「対象の文書と役の指示を別の会話に貼って読ませると、独立性が上がる」と伝えます。`;
+  const dataNote = "検出と誤検知の記録は `~/.cache/ja-proofread`（書けなければ一時ディレクトリの下の、自分だけが使える `ja-proofread-cache-<uid>`）に残ります。会話をまたいで残るかは分からないので、残らない前提で使います。環境変数 `JA_PROOFREAD_DATA` は付けません。";
   let out = src
     .replace(/^---\n[\s\S]*?\n---\n\n?/, "")
     .replaceAll('JA_PROOFREAD_DATA="${CLAUDE_PLUGIN_DATA}" ', "")
@@ -151,7 +177,7 @@ function chatReference(name, src) {
 `);
   }
   const head = { write: "書く前の準備", proofread: "仕上げ（頼まれたときだけ）", "grow-ledger": "台帳を育てる" }[name] || name;
-  out = `<!-- ja-proofread のプラグインの ${name} スキルを、claude.ai のチャット向けに書き直したもの（${head}）。${DIR} は、このスキルのフォルダ（SKILL.md があるフォルダ）。 -->\n\n` + out;
+  out = `<!-- ja-proofread のプラグインの ${name} スキルを、claude.ai のチャット向けに書き直したもの（${head}）。 -->\n\n${DIR_NOTE}\n\n` + out;
   if (name === "proofread") out = out.replace(/^(# [^\n]*\n\n)/m, `$1${roleNote}\n\n`);
   if (out.includes("${CLAUDE_PLUGIN_")) throw new Error(`references/${name}.md に、置き換えられない \${CLAUDE_PLUGIN_…} が残っています`);
   if (/autoRegisterCandidates/.test(out)) throw new Error(`references/${name}.md に、Notion への自動の登録の記述が残っています`);
@@ -164,14 +190,14 @@ export function skillEntries() {
   const files = new Map();
   const add = (rel, buf) => files.set(`${SKILL_NAME}/${rel}`, Buffer.isBuffer(buf) ? buf : Buffer.from(buf, "utf8"));
   add("SKILL.md", skillMd(v));
-  add("skill.json", JSON.stringify({ name: "ja-proofread-claude-ai", version: v, note: "ja-proofread を claude.ai のチャットのスキルとして使うための印。依存と記録はスキルのフォルダに書かず、~/.cache/ja-proofread（書けなければ一時ディレクトリ）に置く" }, null, 2) + "\n");
+  add("skill.json", JSON.stringify({ name: "ja-proofread-claude-ai", version: v, note: "ja-proofread を claude.ai のチャットのスキルとして使うための印（SKILL.md の手順で、スキルのフォルダを探すのにも使う）。依存と記録はスキルのフォルダに書かず、~/.cache/ja-proofread（書けなければ一時ディレクトリ）に置く" }, null, 2) + "\n");
   const list = tracked();
   for (const p of list) {
     const [top, ...rest] = p.split("/");
-    if (["rules", "data", "config", "templates"].includes(top) || p === "package.json" || p === "package-lock.json") add(p, readFileSync(join(ROOT, p)));
+    if (["rules", "data", "config", "templates"].includes(top) || p === "package.json" || p === "package-lock.json") add(p, chatTemplate(p, readFileSync(join(ROOT, p))));
     else if (top === "scripts" && rest.length === 1 && !SKIP_SCRIPTS.has(rest[0])) add(p, readFileSync(join(ROOT, p)));
     else if (top === "skills" && rest.length === 2 && rest[1] === "SKILL.md") add(`references/${rest[0]}.md`, chatReference(rest[0], readFileSync(join(ROOT, p), "utf8")));
-    else if (top === "agents" && rest.length === 1) add(`references/agents/${rest[0]}`, readFileSync(join(ROOT, p)));
+    else if (top === "agents" && rest.length === 1) add(`references/agents/${rest[0]}`, chatAgent(rest[0], readFileSync(join(ROOT, p), "utf8")));
   }
   return { version: v, files: new Map([...files].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))) };
 }

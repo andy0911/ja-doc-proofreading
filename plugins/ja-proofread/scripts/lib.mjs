@@ -1,5 +1,5 @@
 // 共通処理：設定の読み込み、依存の場所、textlint の実行、構成チェックの集約
-import { readFileSync, existsSync, mkdirSync, writeFileSync, appendFileSync, realpathSync, rmSync, mkdtempSync, readdirSync, renameSync, accessSync, constants as fsConstants } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, writeFileSync, appendFileSync, realpathSync, rmSync, mkdtempSync, readdirSync, renameSync, accessSync, lstatSync, chmodSync, constants as fsConstants } from "node:fs";
 import { dirname, join, resolve, relative, isAbsolute } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -21,13 +21,37 @@ export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 // 根の中の node_modules を使わず、正規表現の検査の記録は共有の置き場でなくスレッドの中（既定の場所）に置く。
 // 記録はスレッドをまたいで残したいので /mnt/project-files の下に置き、依存（node_modules）は既定の場所（~/.cache）に入れる
 // 既定の場所は ~/.cache/ja-proofread（XDG_CACHE_HOME があればその下）。書けないとき（claude.ai のチャットのサンドボックスなど）は、
-// 一時ディレクトリの下の ja-proofread-cache にする。スクリプトの根（スキルのフォルダ）には書かない
+// 一時ディレクトリの下の ja-proofread-cache-<uid>（自分だけが使えるもの。下の tmpCacheDir）にする。スクリプトの根（スキルのフォルダ）には書かない
 function writableDir(d) {
   try { mkdirSync(d, { recursive: true }); accessSync(d, fsConstants.W_OK); return true; } catch { return false; }
 }
+// 一時ディレクトリの下の退避先は、ほかの利用者が先に作って依存（コード）を置けるので、名前に uid を入れ、
+// 自分が持ち主で、シンボリックリンクでなく、権限が 0700 のときだけ使う。合わなければ、このプロセスだけの場所を mkdtemp で作る
+// mkdtemp で作った場所は、子プロセス（textlint の実行など）にも同じものを使わせるため、環境変数で渡す（渡された場所も同じ条件で確かめる）
+let privateTmp = "";
+const PRIVATE_TMP_ENV = "JA_PROOFREAD_PRIVATE_TMP";
+function ownPrivateDir(d, uid) {
+  try {
+    const st = lstatSync(d);
+    return st.isDirectory() && !st.isSymbolicLink() && (uid === null || (st.uid === uid && (st.mode & 0o777) === 0o700)) && writableDir(d);
+  } catch { return false; }
+}
+export function tmpCacheDir() {
+  if (privateTmp) return privateTmp;
+  const uid = typeof process.getuid === "function" ? process.getuid() : null;
+  const d = join(tmpdir(), `ja-proofread-cache-${uid ?? "user"}`);
+  try { mkdirSync(d, { mode: 0o700 }); } catch { /* もうある（下で確かめる）か、作れない */ }
+  if (ownPrivateDir(d, uid)) return (privateTmp = d);
+  const given = process.env[PRIVATE_TMP_ENV];
+  if (given && dirname(given) === tmpdir() && /^ja-proofread-cache-/.test(given.slice(tmpdir().length + 1)) && ownPrivateDir(given, uid)) return (privateTmp = given);
+  privateTmp = mkdtempSync(join(tmpdir(), "ja-proofread-cache-"));
+  try { chmodSync(privateTmp, 0o700); } catch { /* mkdtemp は 0700 で作る */ }
+  process.env[PRIVATE_TMP_ENV] = privateTmp;
+  return privateTmp;
+}
 const defaultCache = () => {
   const d = join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "ja-proofread");
-  return writableDir(d) ? d : join(tmpdir(), "ja-proofread-cache");
+  return writableDir(d) ? d : tmpCacheDir();
 };
 const envData = () => process.env.JA_PROOFREAD_DATA || process.env.CLAUDE_PLUGIN_DATA || "";
 export const KIT_DATA_REL = "../ja-proofread-data";

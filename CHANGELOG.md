@@ -1,5 +1,16 @@
 # 変更履歴
 
+## 0.1.15（2026-11-26）
+- 同梱の一式 `dist/ja-proofread-setup.mjs` の sha256：`d78f40ae3f9321ae7b2314a9832dc37dbedc788aa01042bb9cd30d7f0eca23bb`
+- claude.ai のスキル `dist/claude-ai/ja-proofread-skill.zip` の sha256：`043a994eff68b32f4920878587c70eb21c52a7acf347a50ad259c58458def8b8`
+- 0.1.14 の独立レビューの指摘を直した。台帳の型は変えていない（台帳の版は plugin.json とそろえて 0.1.15 にした）。
+- `ensure-deps.mjs`：npm のキャッシュを、依存の置き場の隣（`npm-cache`）に置く（`--cache`）。HOME に書けないと `~/.npm` を作れず、依存が入らなかったため。
+- `lib.mjs`：既定の記録の置き場に書けないときの退避先を、一時ディレクトリの下の `ja-proofread-cache-<uid>` にした。自分が持ち主で、シンボリックリンクでなく、権限が 0700 のときだけ使い、合わなければ、そのプロセスだけの場所を mkdtemp で作る。0.1.14 の `ja-proofread-cache` は名前が決まっていて持ち主を確かめていなかったので、ほかの利用者が先に依存を置くと、そのコードが動いた。
+- claude.ai のスキル：claude.ai のチャットで `${CLAUDE_SKILL_DIR}` が置き換わるかは分からないので、SKILL.md の最初の手順でスキルのフォルダを `D` に決める（置き換わらなければ、印の `skill.json` を探す）。そのあとのコマンドと references/ は `$D` を使う形にそろえた。
+- claude.ai のスキル：`templates/reader-test.md` の、読者役をサブエージェントとして起動する文を、同じ会話で1人ずつ行う文に書き直した。`references/agents/` から Claude Code 向けの frontmatter（`tools:` など）を外した。
+- claude.ai のスキル：コード実行や Node が使えないときの扱いを、貼る部分と SKILL.md でそろえた（台帳と辞書を読んで点検してもよいが、校正したとは書かず、校正の件数も書かない。textlint が動かなかったと伝える）。description を、プロジェクトの指示で頼まれているときか、本人が校正を頼んだときに使う、に狭めた（ほかの会話で毎回 npm ci が動かないように）。
+- 文書：install-claude-ai.md に、スキルを組織に共有すると Notion の候補一覧の場所も渡ることを書いた。
+
 ## 0.1.14（2026-11-26）
 - 同梱の一式 `dist/ja-proofread-setup.mjs` の sha256：`135d23dd36baf8d9f3537b85085bcd57cdf83736b0bfe3a2e58d5473f67319e4`
 - claude.ai のスキル `dist/claude-ai/ja-proofread-skill.zip` の sha256：`59f1af1a546cbe9d01aecf40bb0384b2f6ee3bdf250225a913b418b69a40c3c6`
