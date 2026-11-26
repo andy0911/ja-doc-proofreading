@@ -70,6 +70,8 @@ export function validateLedger(ledger, { pluginVersion } = {}) {
     if (!TYPES.includes(t)) { errors.push(`${where}: detect.type は ${TYPES.join("/")} のどれかです`); continue; }
     if (t === "regex" || t === "regex-count" || p.detect.pattern) regexes.push({ where, source: p.detect.pattern, flags: p.detect.flags });
     if (t === "structure" && !DETECTORS.includes(p.detect.detector)) errors.push(`${where}: detector は ${DETECTORS.join("/")} のどれかです`);
+    // closing-lines は pattern で締めの行を探すので、pattern が無いと校正のたびに落ちる
+    if (t === "structure" && p.detect.detector === "closing-lines" && (typeof p.detect.pattern !== "string" || !p.detect.pattern)) errors.push(`${where}: structure の closing-lines には pattern（正規表現の文字列）が要ります`);
     if (t === "review" && !p.id.startsWith("R")) errors.push(`${where}: レビュー観点だけの型は R から始まる id にしてください`);
   }
   // 正規表現はまとめて1つの子プロセスで測る
@@ -136,8 +138,8 @@ export function usesLineAnchor(src) {
   return false;
 }
 
-// update の detect は丸ごと置き換わる。書き忘れて消える項目を探す。
-// 返すのは { errors（m が消えて ^ $ の意味が変わるもの）, notes（ほかに消える項目） }
+// update の detect は丸ごと置き換わる。書き忘れて消える項目を、旧 detect のすべての鍵について探す。
+// 返すのは { errors（pattern が消えるもの、m が消えて ^ $ の意味が変わるもの）, notes（ほかに消える項目） }
 export function droppedDetectKeys(oldDetect = {}, newDetect = {}, id = "") {
   const errors = [], notes = [];
   const oldF = String(oldDetect.flags || ""), newF = String(newDetect.flags || "");
@@ -146,7 +148,12 @@ export function droppedDetectKeys(oldDetect = {}, newDetect = {}, id = "") {
     errors.push(`${id} の detect は丸ごと置き換わるため、今の flags「${oldF}」の m が無くなり、^ や $ が文書の先頭と末尾にしか当たらなくなります。変えないときも "flags": "${oldF}" を書いてください（m を外すつもりなら、^ $ を使わない形にしてください）`);
   } else if (lost.length) notes.push(`flags の ${lost.join("")}`);
   for (const k of Object.keys(oldDetect.threshold || {})) if (!(k in (newDetect.threshold || {}))) notes.push(`threshold.${k}`);
-  for (const k of ["detector"]) if (oldDetect[k] !== undefined && newDetect[k] === undefined) notes.push(k);
+  for (const k of Object.keys(oldDetect)) {
+    if (k === "flags" || k === "threshold" || oldDetect[k] === undefined || newDetect[k] !== undefined) continue;
+    // pattern が消えると、型が何も検出しなくなるか、校正のたびに落ちる。書き忘れのことが多いので止める
+    if (k === "pattern") errors.push(`${id} の detect は丸ごと置き換わるため、今の pattern が無くなります。変えないときも "pattern" を書いてください（正規表現を使わない型にするつもりなら、retire してから add で新しい型にしてください）`);
+    else notes.push(k);
+  }
   return { errors, notes: notes.length ? [`${id} の detect を丸ごと置き換えたため、次の項目が無くなりました：${notes.join("、")}。残すつもりだったなら approved.json に書いて反映し直してください`] : [] };
 }
 

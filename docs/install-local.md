@@ -119,6 +119,8 @@ claude plugin update ja-proofread@ja-doc-proofreading
 
 自動で更新したいときは、`/plugin` の Marketplaces タブで、このマーケットプレイスの自動更新をオンにします。自動更新は、対話セッションで最初のメッセージを送ったあと、最大10分ほど待ってから行われます。更新されても、動いているセッションは読み込んだ版のままなので、`Run /reload-plugins to apply` と出たら `/reload-plugins` を実行するか、次に起動したときに新しい版が使われます（[Plugin loading reference](https://code.claude.com/docs/en/plugins/loading.md#when-auto-update-runs)）。自動更新（裏で動く更新）は、入力を求めない認証しか使えません。HTTPS なら `gh auth setup-git` などで資格情報を保存した認証ヘルパー、SSH なら ssh-agent に鍵を入れ、github.com を `known_hosts` に入れておきます。`GITHUB_TOKEN` だけでは、自動更新は認証されません。認証が通らないときは、更新は黙って失敗し、前の版のまま動きます（[What background auto-update does with credentials](https://code.claude.com/docs/en/plugins/host-marketplace#what-background-auto-update-does-with-credentials)）。
 
+環境変数 `DISABLE_UPDATES=1`、`DISABLE_AUTOUPDATER=1`、`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` のどれかを設定していると、プラグインの自動更新はまるごと止まり、`/plugin` の自動更新のスイッチも出ません。これらを設定したままプラグインだけ自動で更新したいときは、`FORCE_AUTOUPDATE_PLUGINS=1` も設定します。これらの変数はプラグイン以外にも効くので、ほかへの影響は [Environment variables](https://code.claude.com/docs/en/env-vars) で確かめます（[Which marketplaces and plugins auto-update](https://code.claude.com/docs/en/plugins/loading#which-marketplaces-and-plugins-auto-update)）。
+
 ## 7. 仲間にも使ってもらう
 
 プロジェクトの `.claude/settings.json` に次を書いてコミットします。
@@ -151,7 +153,9 @@ claude plugin uninstall ja-proofread@ja-doc-proofreading
 claude plugin marketplace remove ja-doc-proofreading
 ```
 
-`--scope project` で入れたときは、`claude plugin uninstall ja-proofread@ja-doc-proofreading --scope project` で外します。`local` で入れたときも同じように `--scope local` をつけます。
+`local` で入れたときは `--scope local` をつけて外します。
+
+`--scope project` で入れたときは注意します。`claude plugin uninstall ja-proofread@ja-doc-proofreading --scope project` は、共有の（コミットする）`.claude/settings.json` からこのプラグインを消すので、仲間の分まで止まります。自分だけ止めたいときは、Claude Code の中で `/plugin` の Installed タブからこのプラグインを選んで Uninstall を選び、「Disable for me」を選びます。自分の `.claude/settings.local.json` に無効と書かれ、プロジェクトには入ったままになります（[Uninstall a plugin the project enables](https://code.claude.com/docs/en/plugins/install#uninstall-a-plugin-the-project-enables)）。プロジェクトの全員でやめるときだけ、`--scope project` の uninstall を使い、変わった `.claude/settings.json` をコミットします。
 
 最後のスコープから外すと、データ置き場（依存、検出の記録、誤検知の記録）も消えます。残したいときは `--keep-data` をつけます。
 

@@ -575,7 +575,7 @@ else {
   const hangData = tmp("jp-hang-");
   write(hangData, "deps/.stamp", readFileSync(join(fake, "deps/.stamp"), "utf8"));
   write(hangData, "deps/node_modules/textlint/bin/textlint.js", "setInterval(() => {}, 1000);\n");
-  const hangScript = write(tmp("jp-hangjs-"), "t.mjs", `import { runTextlint, loadProjectConfig } from ${JSON.stringify(S("lib.mjs"))};\nconst t = Date.now();\nconst r = runTextlint([${JSON.stringify(join(ROOT, "tests/fixtures/plain.md"))}], "doc", loadProjectConfig(), { deadline: Date.now() + 2000 });\nconsole.log(JSON.stringify({ ms: Date.now() - t, ok: r.ok, e: r.lintError }));\n`);
+  const hangScript = write(tmp("jp-hangjs-"), "t.mjs", `import { runTextlint, loadProjectConfig } from ${JSON.stringify(S("lib.mjs"))};\nconst t = performance.now();\nconst r = runTextlint([${JSON.stringify(join(ROOT, "tests/fixtures/plain.md"))}], "doc", loadProjectConfig(), { deadline: performance.now() + 2000 });\nconsole.log(JSON.stringify({ ms: Math.round(performance.now() - t), ok: r.ok, e: r.lintError }));\n`);
   r = run([hangScript], { env: { JA_PROOFREAD_DATA: hangData }, timeout: 30000 });
   const hang = json(r.stdout);
   ok(`締め切りを渡すと、止まった textlint を打ち切って lintError を返す（${hang.ms}ms）`, !r.error && hang.ok === false && /時間内/.test(hang.e || "") && hang.ms < 8000, (r.error?.message || "") + r.stdout + r.stderr.slice(0, 200));
@@ -672,6 +672,89 @@ if (hasDeps) {
   const tgEmptyRep = proofread(write(tgEmpty, "d.md", "# 語\n\nただしいごを書きます。\n"), [], { cwd: tgEmpty, timeout: 60000 });
   ok("targets の file: /.*/（長さ0で一致し得る）は拒否せず、辞書を使う", !(tgEmptyRep.warnings || []).length && prhMsgs(tgEmptyRep).some((m) => /正しい語/.test(m)), JSON.stringify(tgEmptyRep.warnings) + JSON.stringify(prhMsgs(tgEmptyRep)));
 }
+
+// 20. 0.1.5 で直した不具合の再現
+// 1. 記録を引くたびに記録の数を数え直さない（規則数×記録数に比例して遅くならない）
+const linData = tmp("jp-lin-");
+const linScript = write(tmp("jp-linjs-"), "t.mjs", `import { checkRegexesCached } from ${JSON.stringify(S("lib.mjs"))};\nimport { regexKey } from ${JSON.stringify(S("regex-safety.mjs"))};\nimport { writeFileSync } from "node:fs";\nimport { join } from "node:path";\nconst p = join(process.env.JA_PROOFREAD_DATA, "regex-checked.json");\nconst list = Array.from({ length: 10000 }, (_, i) => ({ source: "きろくのご" + i, flags: "u" }));\nconst data = {};\nfor (const x of list) data[regexKey(x.source, x.flags)] = [];\nfor (let i = list.length; i < 20000; i++) data["k" + i] = [];\nwriteFileSync(p, JSON.stringify(data));\nconst t = performance.now();\nconst out = checkRegexesCached(list, { budgetMs: 600000 });\nconsole.log(JSON.stringify({ ms: Math.round(performance.now() - t), ok: out.every((x) => Array.isArray(x) && x.length === 0) }));\n`);
+const lin = json(run([linScript], { env: { JA_PROOFREAD_DATA: linData }, timeout: 120000 }).stdout);
+ok(`記録2万件から規則1万件を引いても3秒以内（${lin.ms}ms。0.1.4 では約28秒）`, lin.ok === true && lin.ms < 3000, JSON.stringify(lin));
+ok("regexCache は記録の数を最初に1回だけ数え、get では数え直さない", /let size = Object\.keys\(data\)\.length;/.test(readFileSync(S("lib.mjs"), "utf8")) && !/get\(k\) \{[^}]*Object\.keys\(data\)\.length/.test(readFileSync(S("lib.mjs"), "utf8")));
+
+// 2. update で detect の pattern を書き忘れると止める。closing-lines には pattern が要る
+{
+  const s0 = snapshot();
+  const res = applyItems([{ action: "update", id: "P005", detect: { type: "structure", detector: "closing-lines", threshold: { minCount: 2 } } }]);
+  ok("update で P005 の pattern を書き忘れると止まり、ファイルは変わらない", res.status === 1 && snapshot() === s0 && /P005 の detect は丸ごと置き換わるため、今の pattern が無くなります/.test(res.stderr), res.stdout + res.stderr);
+  const vRepo = tmp("jp-vrepo-");
+  const vLedgerJs = makeRepo(vRepo);
+  const vPath = join(vRepo, "plugins/ja-proofread/data/ledger.json");
+  const vLedger = json(readFileSync(vPath, "utf8"));
+  delete vLedger.patterns.find((p) => p.id === "P005").detect.pattern;
+  writeFileSync(vPath, JSON.stringify(vLedger));
+  r = run([vLedgerJs, "validate"]);
+  ok("validate は pattern の無い closing-lines を拒否する", r.status === 1 && /P005.*closing-lines には pattern/.test(r.stderr), r.stderr);
+}
+
+// 3-1. 時間の上限の環境変数が Infinity や負の数、数でないものなら既定値にする
+const budgetOf = (v) => run(["--input-type=module", "-e", `import { PRH_BUDGET_MS } from ${JSON.stringify(pathToFileURL(S("lib.mjs")).href)}; console.log(PRH_BUDGET_MS);`], { env: { JA_PROOFREAD_PRH_BUDGET_MS: v } }).stdout.trim();
+const budgets = ["Infinity", "-5", "abc", "1e400", "0", "5000"].map(budgetOf);
+ok("JA_PROOFREAD_PRH_BUDGET_MS は有限の正の数だけを使う（Infinity・-5・abc・1e400・0 は既定の20000、5000 は 5000）", JSON.stringify(budgets) === JSON.stringify(["20000", "20000", "20000", "20000", "20000", "5000"]), JSON.stringify(budgets));
+if (hasDeps) {
+  const infDir = prhProj("version: 1\nrules:\n  - expected: 問い合わせ\n    pattern: 問合せ\n");
+  const infRun = run([S("proofread.mjs"), "--json", write(infDir, "d.md", "# 窓口\n\n問合せは窓口で受けます。\n")], { cwd: infDir, env: { JA_PROOFREAD_PRH_BUDGET_MS: "Infinity" }, timeout: 60000 });
+  const infRep = json(infRun.stdout);
+  ok("JA_PROOFREAD_PRH_BUDGET_MS=Infinity でも校正が落ちず、プロジェクトの辞書を使う", infRun.status !== null && infRep.ok === true && prhMsgs(infRep).some((m) => /問い合わせ/.test(m)), infRun.stderr.slice(0, 300) + JSON.stringify(infRep.warnings));
+}
+
+// 3-2. 締め切りは performance.now() で測る（Date.now() が巻き戻っても延びない）
+const backScript = write(tmp("jp-backjs-"), "t.mjs", `let t = 4e12;\nDate.now = () => (t -= 1000);\nconst { checkRegexesCached } = await import(${JSON.stringify(pathToFileURL(S("lib.mjs")).href)});\nconst list = ${JSON.stringify(slowShapes)};\nconst t0 = performance.now();\nconst out = checkRegexesCached(list, { budgetMs: 300 });\nconsole.log(JSON.stringify({ ms: Math.round(performance.now() - t0), pending: out.filter((x) => x === null).length }));\n`);
+const back = json(run([backScript], { env: { JA_PROOFREAD_DATA: tmp("jp-back-") }, timeout: 120000 }).stdout);
+ok(`Date.now() が巻き戻っても、300ms の上限なら2秒以内に戻り、残りは未確認にする（${back.ms}ms）`, back.ms < 2000 && back.pending > 0, JSON.stringify(back));
+ok("締め切りの計算に Date.now() を使わない（lib.mjs・regex-safety.mjs・hook-post-edit.mjs の締め切り）", !/Date\.now\(\)/.test(readFileSync(S("lib.mjs"), "utf8") + readFileSync(S("regex-safety.mjs"), "utf8")) && /const deadline = HOOK_TIMEOUT_MS - HOOK_MARGIN_MS;/.test(readFileSync(S("hook-post-edit.mjs"), "utf8")));
+
+// 3-3. 深い入れ子は再帰で止まらず、その規則だけを拒否する
+const deep = "(".repeat(5000) + "ふかいご" + ")".repeat(5000);
+const deepRes = safe(() => rs8.checkShape(deep, "u"));
+const deepMin = (() => { try { rs8.minLength(deep); return "no throw"; } catch (e) { return e instanceof RangeError && /200 段/.test(e.message) ? "limit" : e.message; } })();
+ok("5000段の入れ子は例外を出さずに「安全と確かめられない」として拒否し、minLength も深さの上限で止まる", Array.isArray(deepRes) && deepRes.length === 1 && /入れ子が 200 段を超え/.test(deepRes[0]) && deepMin === "limit", JSON.stringify(deepRes) + deepMin);
+ok("200段までの入れ子は形の検査を通す", safe(() => rs8.checkShape("(".repeat(200) + "ふかいご" + ")".repeat(200), "u").length === 0));
+if (hasDeps) {
+  const deepDir = prhProj(`version: 1\nrules:\n  - expected: 深い語\n    pattern: /${deep}/\n  - expected: 問い合わせ\n    pattern: 問合せ\n`);
+  const deepRun = run([S("proofread.mjs"), "--json", write(deepDir, "d.md", "# 窓口\n\n問合せは窓口で受けます。\n")], { cwd: deepDir, timeout: 60000 });
+  const deepRep = json(deepRun.stdout);
+  ok("5000段の入れ子の prh 規則があっても校正全体は止まらず、その規則だけを外す", deepRep.ok === true && /1件の規則に使えない正規表現/.test(prhWarn(deepRep)) && /入れ子/.test(prhWarn(deepRep)) && prhMsgs(deepRep).some((m) => /問い合わせ/.test(m)), deepRun.stderr.slice(0, 300) + prhWarn(deepRep));
+}
+
+// 3-4. 選択肢のとても多い繰り返しも、形の検査の途中で締め切りを見る
+const manyAlt = "(?:" + Array.from({ length: 1500 }, (_, i) => String.fromCharCode(0x4e00 + i)).join("|") + "|\\p{Script=Greek})+";
+const altData = tmp("jp-manyalt-");
+process.env.JA_PROOFREAD_DATA = altData;
+t0 = performance.now();
+const manyRes = safe(() => checkRegexesCached([{ source: manyAlt, flags: "u" }], { budgetMs: 500 })) || [];
+const manyMs = Math.round(performance.now() - t0);
+if (outerEnvData === undefined) delete process.env.JA_PROOFREAD_DATA; else process.env.JA_PROOFREAD_DATA = outerEnvData;
+const manyCache = safe(() => json(readFileSync(join(altData, "regex-checked.json"), "utf8"))) || {};
+ok(`選択肢1500個の繰り返しでも、500ms の上限なら2秒以内に戻り、未確認（null）として記録に残さない（${manyMs}ms）`, manyMs < 2000 && manyRes.length === 1 && manyRes[0] === null && !Object.keys(manyCache).length, manyMs + JSON.stringify(manyRes));
+if (hasDeps) {
+  const altDir2 = prhProj(`version: 1\nrules:\n  - expected: 多い語\n    pattern: /${manyAlt}/\n  - expected: 問い合わせ\n    pattern: 問合せ\n`);
+  const altDoc2 = write(altDir2, "d.md", "# 窓口\n\n問合せは窓口で受けます。\n");
+  t0 = performance.now();
+  r = run([S("hook-post-edit.mjs")], { input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: altDoc2 }, cwd: altDir2 }), env: { CLAUDE_PROJECT_DIR: altDir2, JA_PROOFREAD_PRH_BUDGET_MS: "2000" }, timeout: 60000 });
+  const altMs2 = Math.round(performance.now() - t0);
+  const altOut2 = json(r.stdout).hookSpecificOutput?.additionalContext || json(r.stdout).reason || "";
+  ok(`選択肢のとても多い prh 規則があってもフックが上限のうちに戻り、その規則だけを今回は外す（${altMs2}ms）`, !r.error && altMs2 < 20000 && /時間内に確かめ終わらなかった/.test(altOut2) && /問い合わせ/.test(altOut2), (r.error?.message || "") + altOut2.slice(0, 400));
+}
+
+// 参考. 同梱の案内と、同梱したスキルの説明
+const nbProj = tmp("jp-nobak-");
+const nbOut = run([S("install-into-project.mjs"), nbProj]).stdout;
+const wbProj = tmp("jp-withbak-");
+mkdirSync(join(wbProj, ".claude"), { recursive: true });
+writeFileSync(join(wbProj, ".claude/settings.json"), "{}");
+const wbOut = run([S("install-into-project.mjs"), wbProj]).stdout;
+ok("settings.json が無かったプロジェクトに同梱しても .bak の案内を出さず、あったときは出す", !nbOut.includes("settings.json.bak") && /もともと無かった/.test(nbOut) && !existsSync(join(nbProj, ".claude/settings.json.bak")) && /元のファイルは settings\.json\.bak/.test(wbOut) && existsSync(join(wbProj, ".claude/settings.json.bak")), nbOut + wbOut);
+ok("同梱したスキルに、プラグインのデータ置き場の説明が残らない", ![vsk, vgl].some((x) => /JA_PROOFREAD_DATA=…|プラグインのデータ置き場/.test(x)) && /データ置き場は、書いた直後のフックと同じ既定の場所/.test(vsk) && /データ置き場は、書いた直後のフックと同じ既定の場所/.test(vgl));
 
 // 12. 一時ディレクトリを残さない（このテストが作ったものは、ここで消す）
 cleanup();

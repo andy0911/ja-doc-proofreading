@@ -146,7 +146,10 @@ for (const name of readdirSync(join(ROOT, "skills"))) {
   const out = src
     .replace(/^name:\s*(.+)$/m, `name: ${SKILL_PREFIX}$1`)
     .replaceAll('JA_PROOFREAD_DATA="${CLAUDE_PLUGIN_DATA}" ', "")
+    // データ置き場の説明は、同梱した版では当てはまらない（フックと同じ既定の場所を使う）ので、段落ごと差し替える
+    .replace(/^スクリプトは、下のコマンドの形のまま動かします。頭の `JA_PROOFREAD_DATA=…` は[^。]*。(?:外すと[^。]*。)?$/gm, "スクリプトは、下のコマンドの形のまま動かします。データ置き場は、書いた直後のフックと同じ既定の場所（`~/.cache/ja-proofread/`）です。")
     .replace(/頭の `JA_PROOFREAD_DATA=…` は[^。]*。(?:外すと[^。]*。)?/g, "")
+    .replaceAll("| プラグインのデータ置き場 |", "| データ置き場（`~/.cache/ja-proofread/`） |")
     // プラグインとして入れたときだけの案内は消す（同梱した版から install-into-project は動かせないため）
     .replace(/[ \t]*<!-- plugin-only -->[\s\S]*?<!-- \/plugin-only -->\n?/g, "")
     // 同梱したサブエージェントは、プラグインの接頭辞なしの名前で呼ぶ
@@ -185,11 +188,14 @@ if (!existsSync(cfgPath)) {
 }
 
 const v = readJSON(join(ROOT, ".claude-plugin", "plugin.json")).version;
+// settings.json.bak は、もとから settings.json があったときだけ作る。無いときは .bak の案内を出さない
+const hasBak = existsSync(settingsPath + ".bak");
+const bakNote = hasBak ? "。元のファイルは settings.json.bak" : created.settings ? "。settings.json はもともと無かったため新しく作りました（.bak はありません）" : "";
 console.log(`ja-proofread v${v} を ${target} に同梱しました。
 - 本体: .claude/ja-proofread/
 - スキル: .claude/skills/${SKILL_PREFIX}write, ${SKILL_PREFIX}proofread, ${SKILL_PREFIX}grow-ledger
 - サブエージェント: .claude/agents/${AGENT_PREFIX}structure-reviewer.md, ${AGENT_PREFIX}fresh-eyes-reader.md
-- フック: .claude/settings.json（SessionStart で依存を入れ、Write/Edit の後に校正。元のファイルは settings.json.bak）
+- フック: .claude/settings.json（SessionStart で依存を入れ、Write/Edit の後に校正${bakNote}）
 - 設定: .ja-proofread.json
 コミットするパス：.claude/ja-proofread .claude/skills/ja-proofread-* .claude/agents/ja-proofread-* .claude/settings.json .ja-proofread.json
-（settings.json.bak はコミットしません。Notion の場所も入るので、公開リポジトリや社外と共有するリポジトリには同梱しないでください）`);
+（${hasBak ? "settings.json.bak はコミットしません。" : ""}Notion の場所も入るので、公開リポジトリや社外と共有するリポジトリには同梱しないでください）`);

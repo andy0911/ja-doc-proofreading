@@ -4,16 +4,16 @@
 // Claude に直させる（block）のは、前回の結果になかった指摘のうち、重さが hook.blockOn 以上のものがあるときだけ。
 // 既存の文書にもともとある指摘のために、関係ない編集のたびに止め続けないため。
 import { existsSync, statSync, readFileSync, writeFileSync, renameSync, rmSync } from "node:fs";
-import { performance } from "node:perf_hooks";
 import { resolve, join } from "node:path";
 import { ROOT, loadProjectConfig, matchesAny, toRel, proofreadFiles, summarize, dataDir, fileKey } from "./lib.mjs";
 
 export const MAX_BYTES = 200 * 1024;
 // フックの時間の上限（hooks.json と install-into-project.mjs の timeout と同じ）。これを超えると Claude Code が黙って打ち切るので、
-// 起動してからの時間を引き、結果を返す余裕を残して、prh の辞書の検査と textlint を締め切りまでに収める
+// 起動してからの時間を引き、結果を返す余裕を残して、prh の辞書の検査と textlint を締め切りまでに収める。
+// 締め切りは performance.now()（このプロセスの起動からの単調に進む時刻）で測る。時計が巻き戻っても延びないため
 export const HOOK_TIMEOUT_MS = 60000;
 const HOOK_MARGIN_MS = 6000;
-const deadline = Math.round(performance.timeOrigin) + HOOK_TIMEOUT_MS - HOOK_MARGIN_MS;
+const deadline = HOOK_TIMEOUT_MS - HOOK_MARGIN_MS;
 const ORDER = { must: 0, should: 1, info: 2 };
 const FOOTER = "\n\n指摘は機械的な候補です。直す前に文脈を確かめ、誤検知なら ja-proofread の grow-ledger スキルで誤検知として記録してください。";
 

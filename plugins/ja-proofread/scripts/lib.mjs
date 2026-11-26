@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { tmpdir, homedir } from "node:os";
+import { performance } from "node:perf_hooks";
 import { runStructureChecks, disabledRanges, useMarkdownParser } from "./structure-check.mjs";
 import { checkShape, measureRegexes, regexKey } from "./regex-safety.mjs";
 
@@ -197,8 +198,8 @@ export function isDisabled(ruleId, disable = []) {
 export const LEDGER_RULE = join(ROOT, "rules", "ledger-patterns.js");
 
 // tmp を渡すと、プロジェクトの prh 辞書を検査して、通った規則だけを書いた辞書をそこに置く。
-// prhDeadline は、すべての辞書の読み込みと検査で分け合う締め切り（Date.now() の値）
-export function buildTextlintConfig(profile, cfg, { tmp = null, prhDeadline = Date.now() + PRH_BUDGET_MS } = {}) {
+// prhDeadline は、すべての辞書の読み込みと検査で分け合う締め切り（performance.now() の値。時計が巻き戻っても延びないよう、単調に進む時刻を使う）
+export function buildTextlintConfig(profile, cfg, { tmp = null, prhDeadline = performance.now() + PRH_BUDGET_MS } = {}) {
   checkProfile(profile);
   const base = readJSON(join(ROOT, "config", `${profile}.textlintrc.json`));
   const conf = JSON.parse(JSON.stringify(base));
@@ -234,7 +235,9 @@ export function buildTextlintConfig(profile, cfg, { tmp = null, prhDeadline = Da
 // 鍵は検査の版・正規表現・flags なので、辞書の imports 先を含めて中身が変われば、変わった正規表現だけを測り直す。
 // 子プロセスが止まって測れなかったもの（一時的な失敗かもしれない）は残さず、次の校正で測り直す
 // 時間の上限は既定で20秒。遅い計算機やテストでは JA_PROOFREAD_PRH_BUDGET_MS（ミリ秒）で変えられる
-export const PRH_BUDGET_MS = Number(process.env.JA_PROOFREAD_PRH_BUDGET_MS) > 0 ? Number(process.env.JA_PROOFREAD_PRH_BUDGET_MS) : 20000;
+// 有限の正の数だけを使い、それ以外（Infinity・負の数・数でないもの）は既定値にする（子プロセスの timeout に渡せないため）
+const budgetEnv = Number(process.env.JA_PROOFREAD_PRH_BUDGET_MS);
+export const PRH_BUDGET_MS = Number.isFinite(budgetEnv) && budgetEnv > 0 ? budgetEnv : 20000;
 const CACHE_MAX = 20000;
 function regexCache() {
   const path = join(dataDir(), "regex-checked.json");
@@ -242,19 +245,26 @@ function regexCache() {
   if (!isObject(data)) data = {};
   let dirty = false;
   let order = null; // 古い順の位置。使ったものを新しい扱いにするときだけ作る
+  // 記録の数は最初に1回だけ数え、新しい鍵を足したときだけ増やす（get のたびに数え直すと、規則数×記録数に比例して遅くなる）
+  let size = Object.keys(data).length;
   return {
     get(k) {
-      if (!Array.isArray(data[k])) return undefined;
+      if (!Object.hasOwn(data, k) || !Array.isArray(data[k])) return undefined;
       // 使ったものは新しい扱いにする（よく使う辞書の結果が、古いものから捨てるときに消えないため）。
-      // 毎回書き直さないよう、記録が多く、古い側の半分にあるものだけを動かす
-      const n = Object.keys(data).length;
-      if (n > CACHE_MAX / 2) {
+      // 毎回書き直さないよう、記録が多く、古い側の半分にあるものだけを動かす（動かしても数は変わらない）
+      if (size > CACHE_MAX / 2) {
         order ??= new Map(Object.keys(data).map((key, i) => [key, i]));
-        if ((order.get(k) ?? n) < n / 2) { const v = data[k]; delete data[k]; data[k] = v; order.set(k, Infinity); dirty = true; }
+        if ((order.get(k) ?? size) < size / 2) { const v = data[k]; delete data[k]; data[k] = v; order.set(k, Infinity); dirty = true; }
       }
       return data[k];
     },
-    set: (k, v) => { delete data[k]; data[k] = v; dirty = true; },
+    set(k, v) {
+      if (Object.hasOwn(data, k)) delete data[k]; else size++;
+      data[k] = v;
+      order?.set(k, Infinity);
+      dirty = true;
+    },
+    size: () => size,
     save() {
       if (!dirty) return;
       const keys = Object.keys(data);
@@ -267,22 +277,27 @@ function regexCache() {
 // 正規表現をまとめて確かめる。記録にあるものは使い、無いものだけを測る。
 // list の要素は { source, flags, allowEmpty? }。返すのは問題の説明の配列か null（締め切りまでに確かめ終わらなかったもの）。
 // 形の検査（重ならない選択かを当てて確かめるため、1件で数十ms かかることがある）と時間を測るのを合わせて、deadline までに収める
-export function checkRegexesCached(list, { budgetMs = PRH_BUDGET_MS, deadline = Date.now() + budgetMs } = {}) {
+export function checkRegexesCached(list, { budgetMs = PRH_BUDGET_MS, deadline = performance.now() + budgetMs } = {}) {
   const cache = regexCache();
   const keys = list.map((x) => regexKey(x.source, x.flags, x));
   const out = keys.map((k) => cache.get(k));
   const todo = [];
   for (let k = 0; k < list.length; k++) {
     if (out[k] !== undefined) continue;
-    if (Date.now() >= deadline) { out[k] = null; continue; }
-    const shape = checkShape(list[k].source, list[k].flags, list[k]);
+    if (performance.now() >= deadline) { out[k] = null; continue; }
+    // 形の検査も1件の中で締め切りを見る。締め切りまでに確かめ終わらなかったものは未確認（null）にし、記録には残さない。
+    // 思わぬ例外（深すぎる入れ子など）でも校正全体は止めず、その規則だけを拒否する
+    let shape;
+    try { shape = checkShape(list[k].source, list[k].flags, { ...list[k], deadline }); }
+    catch (e) { shape = [`形を確かめられませんでした（${String(e?.message || e).slice(0, 100)}）`]; }
+    if (shape.pending) { out[k] = null; continue; }
     if (shape.length) { out[k] = shape; cache.set(keys[k], shape); } else todo.push(k);
   }
   // 同じ正規表現は1回だけ測る
   const uniq = [...new Map(todo.map((k) => [keys[k], k])).values()];
   const unmeasured = new Map();
-  if (uniq.length && deadline > Date.now()) {
-    const measured = measureRegexes(uniq.map((k) => list[k]), { budgetMs: deadline - Date.now() });
+  if (uniq.length && deadline > performance.now()) {
+    const measured = measureRegexes(uniq.map((k) => list[k]), { budgetMs: deadline - performance.now() });
     uniq.forEach((k, n) => {
       const m = measured[n];
       if (m && m.transient) unmeasured.set(keys[k], m);
@@ -300,13 +315,13 @@ export function checkRegexesCached(list, { budgetMs = PRH_BUDGET_MS, deadline = 
 const prhLoaded = new Map();
 function loadPrhInChild(abs, deadline) {
   if (prhLoaded.has(abs)) return prhLoaded.get(abs);
-  const left = deadline - Date.now();
+  const left = deadline - performance.now();
   if (left <= 0) return { timeout: true };
   const r = spawnSync(process.execPath, [join(ROOT, "scripts", "prh-load.mjs"), depsBase(), abs], {
-    encoding: "utf8", timeout: left, killSignal: "SIGKILL", maxBuffer: 64 * 1024 * 1024,
+    encoding: "utf8", timeout: Number.isFinite(left) ? Math.ceil(left) : undefined, killSignal: "SIGKILL", maxBuffer: 64 * 1024 * 1024,
   });
   let out;
-  if (r.error?.code === "ETIMEDOUT" || (r.signal && Date.now() >= deadline)) out = { timeout: true };
+  if (r.error?.code === "ETIMEDOUT" || (r.signal && performance.now() >= deadline)) out = { timeout: true };
   else {
     try { out = JSON.parse(r.stdout); } catch { out = null; }
     if (!out || typeof out !== "object") out = { ok: false, error: (r.error?.message || r.signal || (r.stderr || "").trim().split("\n")[0] || "子プロセスが止まりました").slice(0, 200) };
@@ -318,7 +333,7 @@ function loadPrhInChild(abs, deadline) {
 // プロジェクトの prh 辞書を prh 本体で読み（imports や配列の patterns も入る）、規則ごとに組み立てた正規表現を確かめる。
 // 通らない規則は外し、残りを1つの辞書に書き出して、textlint にはそれを渡す。
 // 返すのは { path（textlint に渡す辞書。使わないときは null）, warnings }
-function checkedPrhDictionary(abs, label, outPath, deadline = Date.now() + PRH_BUDGET_MS) {
+function checkedPrhDictionary(abs, label, outPath, deadline = performance.now() + PRH_BUDGET_MS) {
   if (!loadPrh()) return { path: null, warnings: [`textlint の依存（prh）が見つからないため、prh の辞書 ${label} は使いません`] };
   const engine = loadPrhInChild(abs, deadline);
   if (engine.timeout) return { path: null, warnings: [`prh の辞書 ${label} を時間内に読み終えなかったため、辞書ごと外しました（prh は読み込むときに specs の例文を正規表現に当てるため、止まるおそれのある正規表現と長い例文があると終わりません。辞書の数が多いときは、時間の上限 ${PRH_BUDGET_MS / 1000} 秒をすべての辞書で分け合っています）`] };
@@ -366,7 +381,7 @@ function checkedPrhDictionary(abs, label, outPath, deadline = Date.now() + PRH_B
   return { path: outPath, warnings };
 }
 
-// deadline（Date.now() の値）を渡すと、textlint をそれまでに打ち切る（フックの時間の上限に収めるため）。渡さなければ120秒
+// deadline（performance.now() の値）を渡すと、textlint をそれまでに打ち切る（フックの時間の上限に収めるため）。渡さなければ120秒
 export const TEXTLINT_TIMEOUT_MS = 120000;
 const TEXTLINT_RESERVE_MS = 10000;
 export function runTextlint(files, profile, cfg, { deadline, prhDeadline } = {}) {
@@ -382,7 +397,7 @@ export function runTextlint(files, profile, cfg, { deadline, prhDeadline } = {})
     warnings = built.warnings;
     const confPath = join(tmp, "textlintrc.json");
     writeFileSync(confPath, JSON.stringify(built.conf));
-    timeoutMs = deadline === undefined ? TEXTLINT_TIMEOUT_MS : Math.max(1000, deadline - Date.now());
+    timeoutMs = deadline === undefined ? TEXTLINT_TIMEOUT_MS : Math.max(1000, Math.ceil(deadline - performance.now()));
     r = spawnSync(process.execPath, [bin, "--config", confPath, "-f", "json", ...files.map((f) => resolve(f))], {
       cwd: resolve(bin, "..", "..", "..", ".."), // node_modules の親。ルールはここから探される
       encoding: "utf8",
@@ -420,11 +435,11 @@ export function levelOf(ruleId, message = "") {
   return "info";
 }
 
-// deadline（Date.now() の値）を渡すと、prh の辞書の検査と textlint をそれまでに収める（フックから呼ぶとき）。
+// deadline（performance.now() の値）を渡すと、prh の辞書の検査と textlint をそれまでに収める（フックから呼ぶとき）。
 // prh の辞書の検査の時間（PRH_BUDGET_MS）は、すべての辞書と、種類（doc・slide）ごとの textlint の実行で分け合う
 export function proofreadFiles(files, { cfg = loadProjectConfig(), profile, deadline } = {}) {
   // 締め切りがあるときは、textlint の分（TEXTLINT_RESERVE_MS）を残す
-  const prhDeadline = Math.min(Date.now() + PRH_BUDGET_MS, (deadline ?? Infinity) - TEXTLINT_RESERVE_MS);
+  const prhDeadline = Math.min(performance.now() + PRH_BUDGET_MS, (deadline ?? Infinity) - TEXTLINT_RESERVE_MS);
   const ledger = loadLedger();
   const out = [];
   const byProfile = new Map();

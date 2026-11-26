@@ -15,10 +15,15 @@ import { fileURLToPath } from "node:url";
 import { readFileSync, writeSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
+import { performance } from "node:perf_hooks";
 
 const SELF = fileURLToPath(import.meta.url);
 export const MAX_MS = 200;
 export const KILL_MS = 1000;
+// グループの入れ子の深さの上限。これより深いものは、確かめる途中で関数の呼び出しが深くなりすぎるため、安全と確かめられないとして拒否する
+export const MAX_DEPTH = 200;
+// 締め切りを越えて確かめ終わらなかったときに投げる印（shapeProblem の中から checkShape まで戻す）
+const PENDING = Symbol("pending");
 
 // 量指定子を読む。返すのは { len, max }（max は繰り返しの上限。上限なしは Infinity）。
 // 回数が決まっている {n} は、文字の取り方が1通りなので繰り返しとして扱わない（max を 1 にする）
@@ -51,7 +56,7 @@ function quantMin(src, i) {
 // 一致する文字列の最短の長さ（文字の数の下限）。0 なら空文字に一致し得る。
 // 後方参照は 0 と数える（安全側）。正しい正規表現であることは先に new RegExp で確かめておく
 export function minLength(src) {
-  let i = 0;
+  let i = 0, depth = 0;
   function alt() {
     let best = seq();
     while (src[i] === "|") { i++; best = Math.min(best, seq()); }
@@ -86,9 +91,12 @@ export function minLength(src) {
       return 1;
     }
     if (c === "(") {
+      // 入れ子が深すぎると呼び出しが深くなりすぎる（RangeError で校正全体が止まる）ので、先に止める
+      if (++depth > MAX_DEPTH) throw new RangeError(`グループの入れ子が ${MAX_DEPTH} 段を超えています`);
       const m = /^\((?:\?(?:(=|!|<=|<!)|:|<[A-Za-z_$][\w$]*>))?/.exec(src.slice(i));
       i += m[0].length;
       const inner = alt();
+      depth--;
       i++; // )
       return m[1] ? 0 : inner; // 先読み・後読みは文字を取らない
     }
@@ -97,6 +105,19 @@ export function minLength(src) {
     return 1;
   }
   return alt();
+}
+
+// グループの入れ子のいちばん深い段数（エスケープと文字クラスの中は数えない）。再帰しないので、深くても止まらない
+export function groupDepth(src) {
+  let depth = 0, max = 0;
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i];
+    if (c === "\\") { i++; continue; }
+    if (c === "[") { for (i++; i < src.length && src[i] !== "]"; i++) if (src[i] === "\\") i++; continue; }
+    if (c === "(") max = Math.max(max, ++depth);
+    else if (c === ")") depth--;
+  }
+  return max;
 }
 
 // 1つの選択肢が「1文字か文字クラス1つ」か（\s \d \p{…} 　 . [^…] などを含む）
@@ -131,11 +152,14 @@ function topAlternatives(content) {
 // 0〜FFFFだけを当てる（BMP の外の文字には、どの選択肢も当たらないため）
 const ASTRAL_CAPABLE = /\.|\\[SWDpP]|\[\^|\\u\{|\\u[dD][89a-fA-F]|[\uD800-\uDFFF]/;
 const disjointMemo = new Map();
-export function simpleDisjointAlternation(content, flags = "") {
+// deadline（performance.now() の値）を渡すと、当てる途中でも一定の回数ごとに時刻を確かめ、越えたら PENDING を投げる
+// （選択肢がとても多いと、1件で数分かかることがあるため。確かめ終わらなかったものは覚えない）
+const CHECK_EVERY = 4096;
+export function simpleDisjointAlternation(content, flags = "", { deadline = Infinity } = {}) {
   const f = [...new Set(String(flags).replace(/[^isu]/g, ""))].join("");
   const key = f + "\0" + content;
   if (disjointMemo.has(key)) return disjointMemo.get(key);
-  let ok = false;
+  let ok = false, work = 0;
   const parts = topAlternatives(content);
   if (parts.length >= 2 && parts.every((p) => SINGLE_ATOM.test(p))) {
     try {
@@ -147,9 +171,12 @@ export function simpleDisjointAlternation(content, flags = "") {
         // u ありで BMP の中だけを当てるときも、サロゲートの半分は1文字として当てる（u ありの [^…] などと同じ扱い）
         const s = u ? String.fromCodePoint(cp) : String.fromCharCode(cp);
         let n = 0;
-        for (const re of res) if (re.test(s) && ++n > 1) { ok = false; break; }
+        for (const re of res) {
+          if (++work % CHECK_EVERY === 0 && performance.now() >= deadline) throw PENDING;
+          if (re.test(s) && ++n > 1) { ok = false; break; }
+        }
       }
-    } catch { ok = false; }
+    } catch (e) { if (e === PENDING) throw e; ok = false; }
   }
   disjointMemo.set(key, ok);
   return ok;
@@ -159,7 +186,12 @@ export function simpleDisjointAlternation(content, flags = "") {
 // own：そのグループ自身の | 、deep：中のグループから伝わった、重なり得る | 、
 // cands：中のグループから伝わった、重ならない1文字の選択かもしれない | （確かめるのは、繰り返すグループに入っていると分かったときだけ。
 // 重ならないかを当てて確かめるのは時間がかかるため、繰り返さないグループでは確かめない）
-export function shapeProblem(src, flags = "") {
+// deadline を渡すと、重ならないかを当てて確かめる途中で締め切りを見る。越えたら "pending" を返す
+export function shapeProblem(src, flags = "", { deadline = Infinity } = {}) {
+  try { return shapeProblemInner(src, flags, deadline); }
+  catch (e) { if (e === PENDING) return "pending"; throw e; }
+}
+function shapeProblemInner(src, flags, deadline) {
   const frame = (start) => ({ rep: false, own: false, deep: false, cands: [], start });
   const stack = [frame(0)];
   for (let i = 0; i < src.length; i++) {
@@ -190,7 +222,7 @@ export function shapeProblem(src, flags = "") {
       const deep = g.deep || (g.own && cand === null);
       const cands = cand === null ? g.cands : [...g.cands, cand];
       if (repeated && g.rep) return "nested";
-      if (repeated && (deep || cands.some((x) => !simpleDisjointAlternation(x, flags)))) return "alternation";
+      if (repeated && (deep || cands.some((x) => !simpleDisjointAlternation(x, flags, { deadline })))) return "alternation";
       const parent = stack[stack.length - 1];
       if (g.rep || repeated) parent.rep = true;
       // 中の選択は外のグループにも残る（(?:(?:a|aa))+ も拒否する）。繰り返して確かめ終えた候補は、もう伝えない
@@ -285,17 +317,23 @@ function probe(pattern, flags) {
 
 // 形と書き方だけを確かめる（速い）。問題の説明の配列を返す（問題がなければ空）。
 // allowEmpty：長さ0の一致を問題にしない（prh の targets の file のように、本文ではなくファイルのパスに当てるもの）
-export function checkShape(pattern, flags = "", { allowEmpty = false } = {}) {
+// deadline（performance.now() の値）を渡すと、締め切りまでに確かめ終わらなかったときは pending の印がついた空の配列を返す
+// （問題があるとも無いとも決めていないので、記録に残さず、次の校正で確かめ直す）
+export function checkShape(pattern, flags = "", { allowEmpty = false, deadline = Infinity } = {}) {
   if (typeof pattern !== "string" || !pattern) return ["正規表現が空です"];
   const raw = String(flags ?? "");
   if (!/^[gimsu]*$/.test(raw)) return [`flags に使えるのは i m s u だけです（${flags}）`];
   if (new Set(raw).size !== raw.length) return [`flags に同じ文字が2回以上あります（${flags}）`];
   const f = raw.replace("g", "");
+  if (groupDepth(pattern) > MAX_DEPTH) return [`グループの入れ子が ${MAX_DEPTH} 段を超えているため、安全と確かめられず使えません`];
   try { new RegExp(pattern, f); } catch (e) { return [`正規表現が不正です（${e.message}）`]; }
-  const shape = shapeProblem(pattern, f);
+  const shape = shapeProblem(pattern, f, { deadline });
+  if (shape === "pending") { const out = []; Object.defineProperty(out, "pending", { value: true }); return out; }
   if (shape === "nested") return ["繰り返しの中に繰り返しがあります（(あ+)+ のような形）。長い文で止まるおそれがあるため使えません"];
   if (shape === "alternation") return ["繰り返すグループの中に | があります（(?:漢|漢字?)+ のような形）。選択肢が重なると長い文で止まるおそれがあるため使えません。[漢字] のような文字クラスにするか、繰り返しの外で選んでください（選択肢がどれも1文字か文字クラス1つで、互いに同じ文字に当たらないときは使えます）"];
-  if (!allowEmpty && minLength(pattern) === 0) return ["長さ0の文字列に一致し得ます（空文字、? や * だけの形、先読み・後読みだけの形など）"];
+  let min;
+  try { min = minLength(pattern); } catch (e) { return [`形を確かめられませんでした（${String(e?.message || e).slice(0, 100)}）`]; }
+  if (!allowEmpty && min === 0) return ["長さ0の文字列に一致し得ます（空文字、? や * だけの形、先読み・後読みだけの形など）"];
   return [];
 }
 
@@ -323,9 +361,9 @@ export function measureRegexes(items, { budgetMs } = {}) {
   const results = new Array(items.length).fill(undefined);
   const flagsOf = (x) => String(x.flags || "").replace("g", "");
   let start = 0;
-  const until = budgetMs === undefined ? Infinity : Date.now() + budgetMs;
+  const until = budgetMs === undefined ? Infinity : performance.now() + budgetMs;
   while (start < items.length) {
-    const left = until - Date.now();
+    const left = Math.ceil(until - performance.now());
     if (left <= 0) break;
     const rest = items.slice(start).map((x) => ({ source: x.source, flags: flagsOf(x) }));
     const killAfter = Number.isFinite(left) ? left + KILL_MS * 2 + 5000 : rest.length * (KILL_MS + 500) + 10000;
@@ -386,10 +424,10 @@ const emit = (o) => writeSync(1, JSON.stringify(o) + "\n");
 // 子プロセスの中：worker で1件ずつ測り、KILL_MS のあいだ返事がなければ worker を止めて次へ進む
 async function probeBatch() {
   const { items, budgetMs } = JSON.parse(readFileSync(0, "utf8"));
-  const deadline = budgetMs == null ? Infinity : Date.now() + budgetMs;
+  const deadline = budgetMs == null ? Infinity : performance.now() + budgetMs;
   let next = 0;
   while (next < items.length) {
-    if (Date.now() >= deadline) { emit({ done: true, budget: true }); process.exit(0); }
+    if (performance.now() >= deadline) { emit({ done: true, budget: true }); process.exit(0); }
     next = await new Promise((resolveNext) => {
       let last = next - 1, settled = false, timer;
       const w = new Worker(SELF, { workerData: { jaProofreadProbe: true, items, start: next } });
@@ -403,7 +441,7 @@ async function probeBatch() {
         if (settled) return;
         emit(m);
         last = m.i;
-        if (Date.now() >= deadline) { w.terminate(); finish(last + 1); return; }
+        if (performance.now() >= deadline) { w.terminate(); finish(last + 1); return; }
         arm();
       });
       w.on("error", (e) => { if (settled) return; emit({ i: last + 1, error: e.message }); finish(last + 2); });
