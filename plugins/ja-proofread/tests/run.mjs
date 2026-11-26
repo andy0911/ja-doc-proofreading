@@ -1024,7 +1024,7 @@ ok("同梱したスキルに、プラグインのデータ置き場の説明が�
   ok("kit の grow-ledger の「配る」は、kit を新しい版にする1行と貼り直しを書く", ksk.includes(`--project-kit "${kit}"`) && /## E\. 配る（kit を新しい版にする）/.test(ksk));
   const pi = readFileSync(join(kit, "PROJECT-INSTRUCTIONS.md"), "utf8");
   const paste = pasteOf(pi);
-  const want = [`(cd "${kit}" && echo "`, `sha256sum -c --quiet kit.sha256) && node "${kit}/scripts/ensure-deps.mjs" && node "${kit}/scripts/proofread.mjs" <ファイル>`, "誤検知と判断したもの以外の「必ず」が0件", "kit が見つからないとき", "読むだけの種類", ".ja-proofread.json", "本人が頼んだときだけ", kdata, ...["write", "proofread", "grow-ledger"].map((n) => `${kit}/skills/${n}/SKILL.md`)];
+  const want = ["「設定 … を使いました」の1行", `(cd "${kit}" && echo "`, `sha256sum -c --quiet kit.sha256) && node "${kit}/scripts/ensure-deps.mjs" && node "${kit}/scripts/proofread.mjs" <ファイル>`, "誤検知と判断したもの以外の「必ず」が0件", "kit が見つからないとき", "読むだけの種類", ".ja-proofread.json", "本人が頼んだときだけ", kdata, ...["write", "proofread", "grow-ledger"].map((n) => `${kit}/skills/${n}/SKILL.md`)];
   ok("貼る部分は3,000字以下で、照らし合わせてからの ensure-deps と proofread、手順の本文、記録の置き場を kit の場所で書き、終わりの行で終わる", paste.length > 500 && [...paste].length <= 3000 && want.every((w) => paste.includes(w)) && paste.endsWith("（ja-proofread の指示はここまで）") && r.status === 0 && pi.includes("一字も変えずにプロジェクト指示に足して"), [[...paste].length, want.filter((w) => !paste.includes(w))].join(" "));
   r = run([DIST, "--project-kit", kit]);
   ok("表示の貼る部分は PROJECT-INSTRUCTIONS.md と同じで、見える区切りの行で囲む", r.status === 0 && pasteOf(r.stdout) === paste, r.stderr);
@@ -1068,6 +1068,16 @@ ok("同梱したスキルに、プラグインのデータ置き場の説明が�
   r = krun([join(kit, "scripts/ensure-deps.mjs")]);
   const kr = krun([join(kit, "scripts/proofread.mjs"), kdoc]);
   ok("kit の ensure-deps と proofread が動き、必ず直す指摘を返し、検出の記録を kit の隣の ja-proofread-data に残す", r.status === 0 && /必ず直す [1-9]/.test(kr.stdout) && existsSync(join(kdata, "hits.jsonl")) && !existsSync(join(kdata, "deps")), kr.stdout.slice(0, 200) + kr.stderr);
+  // 作業しているディレクトリの .ja-proofread.json を使ったら、kit では毎回1行で知らせる（読むことは止めない）
+  {
+    const cwdCfg = tmp("jp-kitcfg-");
+    write(cwdCfg, ".ja-proofread.json", JSON.stringify({ disable: ["prh", "P001"], exclude: ["drafts/**"] }));
+    const ct = spawnSync(process.execPath, [join(kit, "scripts/proofread.mjs"), kdoc], { encoding: "utf8", cwd: cwdCfg, env: kenv });
+    const cj = spawnSync(process.execPath, [join(kit, "scripts/proofread.mjs"), "--json", kdoc], { encoding: "utf8", cwd: cwdCfg, env: kenv });
+    const cp = spawnSync(process.execPath, [S("proofread.mjs"), kdoc], { encoding: "utf8", cwd: cwdCfg, env: BASE_ENV });
+    const line = `ja-proofread: 設定 ${join(cwdCfg, ".ja-proofread.json")} を使いました（止めた規則 2 件：prh、P001／除外 1 件：drafts/**）`;
+    ok("kit で作業しているディレクトリの .ja-proofread.json を使うと、その設定と止めた規則を1行で出す（--json では標準エラーに）", ct.status === 0 && ct.stdout.startsWith(line + "\n") && cj.stderr.includes(line) && json(cj.stdout).files?.length === 1 && !/設定 .* を使いました/.test(cp.stdout + cp.stderr), ct.stdout.slice(0, 300) + cj.stderr.slice(0, 200) + cp.stdout.slice(0, 100));
+  }
   krun([join(kit, "scripts/ledger.mjs"), "fp", "P002", "--text", "x", "--reason", "テスト"]);
   ok("kit で記録した誤検知も ja-proofread-data に残る", existsSync(join(kdata, "false-positives.jsonl")));
   ok("記録の置き場は照らし合わせに入らない（記録が増えても照らし合わせは通る）", sumsOk(kit).status === 0 && !readFileSync(join(kit, "kit.sha256"), "utf8").includes("ja-proofread-data"));

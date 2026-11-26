@@ -86,13 +86,14 @@ d="$(mktemp -d)" && curl -fsSLo "$d/ja-proofread-setup.mjs" https://raw.githubus
 - kit かどうかは、照らし合わせに入る `kit.sha256`（か `kit.json`）があるかで決めます。`kit.json` は照らし合わせに入らないので、消されても kit として動きます。`kit.sha256` を消すと、照らし合わせが通りません。
 - kit として動くときは、kit の中の `node_modules` を使いません。依存は kit の外（`~/.cache/ja-proofread/deps`）に、スレッドごとに lock ファイルの版で入れ直します。
 - 記録の置き場は、`kit.json` の値に頼らず、kit の隣の `ja-proofread-data` に決まっています。
+- 作業しているディレクトリの `.ja-proofread.json` も照らし合わせに入りません。共有フォルダーの下に置かれると、規則を止めて指摘を減らせます。リポジトリでの正当な使い方があるので読むことは止めませんが、kit として動くときは、使うたびに「ja-proofread: 設定 <パス> を使いました（止めた規則 N 件：…）」の1行を出し、スレッドがそれを本人に伝えます。
 - 正規表現の検査の記録（追加の prh 辞書の規則が安全かを確かめた結果）は、共有の記録の置き場でなく、スレッドの中（`~/.cache/ja-proofread`）に置きます。共有の置き場はほかのスレッドが書き換えられ、安全の確認を飛ばせるためです。スレッドごとに確かめ直すので、追加の辞書があると、スレッドの最初の校正は少し遅くなります。
 
 ## 3. 新しいスレッドから使う
 
 プロジェクト指示は新しく始めたスレッドに送られます（[Write project instructions](https://code.claude.com/docs/en/claude-projects#write-project-instructions)）。足す前から動いているスレッドには届かないので、新しいスレッドを始めます。そのあと、文書を書くよう頼めば、スレッドが書いたあとに校正を実行します。「この文書を校正して」と頼めば、proofread の手順で仕上げます。
 
-作業しているディレクトリに `.ja-proofread.json` があれば、その設定（`include`・`exclude`・`profile`・追加の prh 辞書など）が使われます。JSON として読めないなど設定が壊れていると、校正が止まります（スレッドは本人に伝えます）。
+作業しているディレクトリに `.ja-proofread.json` があれば、その設定（`include`・`exclude`・`profile`・追加の prh 辞書など）が使われます。そのときは「設定 … を使いました」の1行が出て、スレッドが本人に伝えます。JSON として読めないなど設定が壊れていると、校正が止まります（スレッドは本人に伝えます）。
 
 確かめたこと：Projects のクラウドのスレッドの中で、raw.githubusercontent.com から取った一式で `/mnt/project-files` の下に kit を書き、照らし合わせが通ること、kit の中の1文字を変えると照らし合わせで止まること、空の HOME で `ensure-deps.mjs` と `proofread.mjs` が動いて指摘が返ること、`--remove` で本人のファイルが残ることを確かめました。また、貼る部分を `claude -p --append-system-prompt` で渡して文書を書かせ、スレッドが指示どおり照らし合わせて proofread を実行し、直すことを確かめました。プロジェクト指示に実際に足して新しいスレッドで試すことは、まだしていません。
 

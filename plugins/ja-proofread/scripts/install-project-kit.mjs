@@ -137,7 +137,7 @@ function pasteText(sumsHash) {
    照らし合わせ（sha256sum）が合わないときは、校正せず、kit が書き換えられたか、kit の版がこの指示と違う（貼り直しが要る）ことを本人に伝えます。
 2. 「必ず」の指摘を直し、proofread をもう一度実行します。誤検知と判断したもの以外の「必ず」が0件になってから渡します。誤検知と判断したものは直さず、渡すときにそう書きます。「直したい」は文脈を見て直します。
 3. 「textlint が動かなかった」と出たら、表記と文法の指摘は確かめられていないと本人に伝えます。
-4. 作業しているディレクトリに \`.ja-proofread.json\` があれば、その設定が使われます。読めないと校正が止まるので、そのときは本人に伝えます。
+4. 作業しているディレクトリに \`.ja-proofread.json\` があれば、その設定が使われ、「設定 … を使いました」の1行が出ます。出たら、止めた規則で指摘が減っていることがあるので、そのことを本人に1行で伝えます。読めないと校正が止まるので、そのときも伝えます。
 
 渡すときは、校正の件数（必ず・直したい・参考）を1行で書きます。
 
@@ -284,7 +284,8 @@ const setAsideNames = [];
 let built;
 try {
   built = buildStage(stage);
-  const newRels = walkFiles(stage);
+  // kit.sha256 を最初に移す（途中で止まっても、次の実行で kit とみなされ、kit として動くように）
+  const newRels = walkFiles(stage).sort((a, b) => (b === "kit.sha256") - (a === "kit.sha256"));
   const newFiles = Object.fromEntries(newRels.map((rel) => [rel, sha(join(stage, rel))]));
   // 前の版で書いたもののうち、新しい版に無く、中身が変わっていないものを消す
   if (oldFiles) for (const [rel, h] of Object.entries(oldFiles)) if (!(rel in newFiles) && unchanged(rel, h)) removeFile(rel);
