@@ -10,10 +10,54 @@ export function maskNonProse(text) {
   return t;
 }
 
+// 行番号の計算。改行の位置を文書ごとに一度だけ数え、二分探索で引く
+let lineCache = { text: null, starts: [] };
 function lineOf(text, index) {
-  let n = 1;
-  for (let i = 0; i < index && i < text.length; i++) if (text.charCodeAt(i) === 10) n++;
-  return n;
+  if (lineCache.text !== text) {
+    const starts = [0];
+    for (let i = text.indexOf("\n"); i !== -1; i = text.indexOf("\n", i + 1)) starts.push(i + 1);
+    lineCache = { text, starts };
+  }
+  const s = lineCache.starts;
+  let lo = 0, hi = s.length - 1;
+  while (lo < hi) {
+    const mid = (lo + hi + 1) >> 1;
+    if (s[mid] <= index) lo = mid; else hi = mid - 1;
+  }
+  return lo + 1;
+}
+
+// <!-- textlint-disable --> から <!-- textlint-enable --> までの範囲（行番号）。
+// ルール名つき（<!-- textlint-disable P001,P008 -->）なら、そのルールだけを外す。enable がなければ文末まで
+const DISABLE_RE = /<!--\s*textlint-(disable|enable)\b([^>]*?)-->/g;
+export function disabledRanges(text) {
+  const ranges = [];
+  const open = [];
+  for (const m of text.matchAll(DISABLE_RE)) {
+    const rules = m[2].split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
+    const line = lineOf(text, m.index);
+    if (m[1] === "disable") open.push({ from: line, start: m.index, rules });
+    else {
+      // ルール名なしの enable はすべてを閉じる。名前つきは同じ名前の disable を閉じる
+      for (let i = open.length - 1; i >= 0; i--) {
+        const o = open[i];
+        if (!rules.length || rules.join(",") === o.rules.join(",")) {
+          ranges.push({ ...o, to: line, end: m.index + m[0].length });
+          open.splice(i, 1);
+          if (rules.length) break;
+        }
+      }
+    }
+  }
+  for (const o of open) ranges.push({ ...o, to: Infinity, end: text.length });
+  return ranges;
+}
+
+function blank(text, ranges) {
+  if (!ranges.length) return text;
+  const chars = [...text.split("")];
+  for (const r of ranges) for (let i = r.start; i < r.end && i < chars.length; i++) if (chars[i] !== "\n") chars[i] = " ";
+  return chars.join("");
 }
 
 export function proseLength(text) {
@@ -159,12 +203,19 @@ export function stats(text) {
 }
 
 export function runStructureChecks(text, ledger, profile = "doc") {
-  const masked = maskNonProse(text);
-  const len = Math.max(proseLength(masked), 1);
+  // textlint-disable の範囲は、件数と構成のチェックからも外す（範囲を空白にして行番号は保つ）
+  const ranges = disabledRanges(text);
+  const all = ranges.filter((r) => !r.rules.length);
+  const named = ranges.filter((r) => r.rules.length);
+  const base = blank(text, all);
+  const maskedAll = maskNonProse(base);
+  const len = Math.max(proseLength(maskedAll), 1);
   const out = [];
   for (const p of ledger.patterns) {
     if (p.status !== "active") continue;
     if (p.profiles && !p.profiles.includes(profile)) continue;
+    const mine = named.filter((r) => r.rules.includes(p.id));
+    const masked = mine.length ? maskNonProse(blank(base, mine)) : maskedAll;
     const t = p.detect?.type;
     if (t === "regex-count") {
       const re = new RegExp(p.detect.pattern, (p.detect.flags || "").replace("g", "") + "g");

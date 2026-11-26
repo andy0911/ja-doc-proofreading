@@ -11,16 +11,30 @@ jobs:
     defaults:
       run:
         working-directory: plugins/ja-proofread
-    env:
-      JA_PROOFREAD_DATA: ${{ runner.temp }}/ja-proofread
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+      - name: データ置き場を一時ディレクトリにする
+        run: echo "JA_PROOFREAD_DATA=$RUNNER_TEMP/ja-proofread" >> "$GITHUB_ENV"
       - name: 依存を入れる
         run: node scripts/ensure-deps.mjs
       - name: 台帳の形を確かめる
         run: node scripts/ledger.mjs validate
       - name: テスト
         run: npm test
+
+  # plugins/ を変えたのに plugin.json の version が main と同じなら落とす。
+  # バージョンが同じだと、利用者が update しても新しい版が入らないため。
+  version-bump:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: バージョンが上がっているか確かめる
+        env:
+          BASE_REF: ${{ github.base_ref }}
+        run: bash .github/scripts/check-version-bump.sh "origin/$BASE_REF"

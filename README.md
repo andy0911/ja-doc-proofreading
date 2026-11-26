@@ -25,10 +25,18 @@ claude plugin install ja-proofread@ja-doc-proofreading --scope user
 - 手元の Claude Code：[docs/install-local.md](docs/install-local.md)
 - クラウドセッション：[docs/install-cloud.md](docs/install-cloud.md)
 
+新しい版が出たら、次を実行して Claude Code を起動し直します。このマーケットプレイスは自動更新が既定でオフです。
+
+```bash
+claude plugin marketplace update ja-doc-proofreading
+claude plugin update ja-proofread@ja-doc-proofreading
+```
+
 ## 中身
 
 ```
 .claude-plugin/marketplace.json   マーケットプレイスの定義
+.github/                          テストと、版を上げ忘れたプルリクエストを落とす CI
 plugins/ja-proofread/
   .claude-plugin/plugin.json      プラグインの定義（版はここで上げる）
   skills/                         write、proofread、grow-ledger
@@ -40,16 +48,20 @@ plugins/ja-proofread/
   config/                         textlint の設定（doc と slide）
   rules/ledger-patterns.js        台帳の正規表現を textlint のルールにしたもの
   scripts/                        校正、構成チェック、頻度比較、台帳の反映、同梱
+  scripts/regex-safety.mjs        台帳と辞書の正規表現が遅くならないかの検査
+  package.json、package-lock.json textlint とルールの版の固定
   templates/                      読者役テスト、人の確認項目、プロジェクト設定の例
   tests/                          動作確認（npm test）
 ```
 
 ## 台帳を育てる流れ
 
-1. 校正のたびに、読者役テストの自由回答と独立レビューから、台帳にない型の候補が出ます。
-2. 候補は Notion の「文章校正 台帳候補」に1件1ページで入ります。承認するのは人だけです。
-3. 承認された候補を `scripts/ledger.mjs apply` で台帳に入れると、版が上がり、`CHANGELOG.md` に記録されます。
-4. プルリクエストをマージすると、利用者は `claude plugin marketplace update` で新しい版を受け取れます。
+1. 台帳にない型の候補は、読者役テストの自由回答、独立レビューの「台帳にない型」、自分の文章との頻度比較、誤検知の記録の4か所から出ます。
+2. 候補を Notion の「文章校正 台帳候補」に1件1ページで登録するのは、本人が頼んだときか、プロジェクトの設定で `notion.autoRegisterCandidates` が `true` のときだけです。それ以外は候補を一覧にして本人に聞きます。
+3. 「承認」にするのは本人だけ、という約束です。Claude への指示で決めているだけで、Notion の権限で止めているわけではありません。
+4. 承認された候補を、このリポジトリの作業コピーで `scripts/ledger.mjs apply` にかけると、台帳と版が上がり、`CHANGELOG.md` に記録されます。全件を確かめてから書くので、1件でも問題があればどのファイルも変わりません。
+5. プルリクエストを出したら Notion の行を「PR中」に、マージしたら「反映済み」にします。
+6. 利用者は、上の「入れ方」の update の2つのコマンドを実行し、起動し直すと新しい版を使えます。
 
 ## テスト
 

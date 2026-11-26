@@ -15,7 +15,8 @@ module.exports = function (context, options = {}) {
   const { Syntax, RuleError, report, getSource } = context;
   if (!options.ledgerPath) return {};
   const profile = options.profile || "doc";
-  const patterns = load(options.ledgerPath).filter((p) => !p.profiles || p.profiles.includes(profile));
+  const disable = options.disable || [];
+  const patterns = load(options.ledgerPath).filter((p) => (!p.profiles || p.profiles.includes(profile)) && !disable.includes(p.id));
   return {
     [Syntax.Str](node) {
       const text = getSource(node);

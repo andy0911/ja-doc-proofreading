@@ -47,7 +47,7 @@ Claude Code の中からなら、`/plugin marketplace add andy0911/ja-doc-proofr
 
 ## 3. 動くか確かめる
 
-1. Claude Code を起動し直します。最初の起動で、textlint とルールが自動で入ります（数十秒。入れる先はプラグインのデータ置き場 `~/.claude/plugins/data/` で、プラグインを更新しても残ります）。
+1. Claude Code を起動し直します。最初の起動で、textlint とルールが自動で入ります（数十秒）。入れる先はプラグインのデータ置き場 `~/.claude/plugins/data/ja-proofread-ja-doc-proofreading/` です。プラグインを更新しても残ります。検出の記録と誤検知の記録も同じ場所に入ります。
 2. 入ったものを確かめます。
 
 ```bash
@@ -66,7 +66,7 @@ claude plugin details ja-proofread@ja-doc-proofreading
 cp ~/.claude/plugins/marketplaces/ja-doc-proofreading/plugins/ja-proofread/templates/ja-proofread.example.json .ja-proofread.json
 ```
 
-場所が違うときは、最小限の `{"profile": "doc"}` だけを書いたファイルでも動きます。主な設定は次のとおりです。
+プラグインの場所が違うときは、最小限の `{"profile": "doc"}` だけを書いたファイルでも動きます。主な設定は次のとおりです。
 
 | 設定 | 意味 |
 |---|---|
@@ -77,20 +77,34 @@ cp ~/.claude/plugins/marketplaces/ja-doc-proofreading/plugins/ja-proofread/templ
 | `prh` | チームの表記辞書を足す |
 | `hook.blockOn` | Claude に直させる重さ。`must`（既定）、`should`、`info`、`never` |
 
-## 5. 新しい版にする
+## 5. スクリプトを手で動かすとき
 
-非公開のマーケットプレイスは、自動更新が既定でオフです。台帳が育ってバージョンが上がったら、次を実行して Claude Code を起動し直します。
+スキルやフックから動かすときは、データ置き場を Claude Code が渡します。ターミナルから手でスクリプトを動かすときは、環境変数 `JA_PROOFREAD_DATA` で同じ場所を指定します。指定しないと `~/.cache/ja-proofread/` が使われ、依存を入れ直したうえ、検出の記録も別の場所に分かれます。
+
+```bash
+export JA_PROOFREAD_DATA=~/.claude/plugins/data/ja-proofread-ja-doc-proofreading
+P=~/.claude/plugins/marketplaces/ja-doc-proofreading/plugins/ja-proofread
+node "$P/scripts/ensure-deps.mjs"
+node "$P/scripts/proofread.mjs" 対象のファイル.md
+node "$P/scripts/ledger.mjs" stats
+```
+
+`CLAUDE_CODE_PLUGIN_CACHE_DIR` を設定しているときは、`~/.claude/plugins` をその場所に読み替えます。
+
+## 6. 新しい版にする
+
+Anthropic が運営するもの以外のマーケットプレイスは、自動更新が既定でオフです。このマーケットプレイスもオフです。台帳が育ってバージョンが上がったら、次を実行して Claude Code を起動し直します。
 
 ```bash
 claude plugin marketplace update ja-doc-proofreading
 claude plugin update ja-proofread@ja-doc-proofreading
 ```
 
-自動で更新したいときは、`/plugin` の Marketplaces タブで、このマーケットプレイスの自動更新をオンにします。
+自動で更新したいときは、`/plugin` の Marketplaces タブで、このマーケットプレイスの自動更新をオンにします。起動時の自動更新は、入力を求めない認証しか使えません。HTTPS なら `gh auth setup-git` などの認証ヘルパー、SSH なら ssh-agent に鍵を入れ、github.com を `known_hosts` に入れておきます。`GITHUB_TOKEN` だけでは、起動時の自動更新は認証されません。
 
-## 6. 仲間にも使ってもらう
+## 7. 仲間にも使ってもらう
 
-プロジェクトの `.claude/settings.json` に次を書いてコミットすると、仲間の手元で、マーケットプレイスの追加とプラグインの有効化が提案されます。仲間はそれぞれ「1. 非公開リポジトリを読めるようにする」を済ませておく必要があります。
+プロジェクトの `.claude/settings.json` に次を書いてコミットします。仲間がそのフォルダを信頼すると、マーケットプレイスが登録され、プラグインも有効になります。提案が出るのではなく、自動で入ります。このプラグインはマーケットプレイスの中に置いてある（相対パスで指している）ためです。仲間はそれぞれ「1. 非公開リポジトリを読めるようにする」を先に済ませておく必要があります。
 
 ```json
 {
@@ -103,22 +117,25 @@ claude plugin update ja-proofread@ja-doc-proofreading
 }
 ```
 
-この設定は、フォルダを信頼したあとに効きます。提案が出ないときは、仲間が一度 `claude plugin install ja-proofread@ja-doc-proofreading --scope project` を実行します。
+自動で入らないとき（認証が通らなかったときなど）は、仲間が先に `claude plugin marketplace add andy0911/ja-doc-proofreading` を実行してから、Claude Code を起動し直します。
 
-## 7. やめる
+## 8. やめる
 
 ```bash
 claude plugin uninstall ja-proofread@ja-doc-proofreading
 claude plugin marketplace remove ja-doc-proofreading
 ```
 
-検出の記録と誤検知の記録もまとめて消えます。残したいときは `--keep-data` をつけます。
+`--scope project` で入れたときは、`claude plugin uninstall ja-proofread@ja-doc-proofreading --scope project` で外します。`local` で入れたときも同じように `--scope local` をつけます。
+
+最後のスコープから外すと、データ置き場（依存、検出の記録、誤検知の記録）も消えます。残したいときは `--keep-data` をつけます。
 
 ## 困ったとき
 
 | 起きたこと | 確かめること |
 |---|---|
 | マーケットプレイスを追加できない | `gh auth status`、または `ssh -T git@github.com`。リポジトリを読む権限があるか |
-| 「textlint の依存がまだ入っていません」と出る | `node ~/.claude/plugins/marketplaces/ja-doc-proofreading/plugins/ja-proofread/scripts/ensure-deps.mjs` を実行し、npm のエラーを見る |
+| 「textlint の依存がまだ入っていません」と出る | 「5. スクリプトを手で動かすとき」のとおり `JA_PROOFREAD_DATA` を設定して `ensure-deps.mjs` を実行し、npm のエラーを見る |
+| 「textlint が動かなかった」と出る | textlint の指摘は確かめられていません。表示されたエラーを見て、`ensure-deps.mjs` で入れ直す |
 | 書いても自動チェックが動かない | `.ja-proofread.json` がプロジェクトの直下にあるか。拡張子が `include` に入っているか |
 | 指摘が多すぎる | スライドなら `profile` を `slide` に。効かない型は `disable` に入れ、grow-ledger スキルで誤検知を記録する |

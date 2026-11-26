@@ -14,9 +14,9 @@ description: 日本語の文書・スライド・報告書を校正するとき�
 | 3. 修正 | あなた | 1と2の指摘を、意味を変えずに直す |
 | 4. 読者役テスト | `fresh-eyes-reader` サブエージェント2〜3体 | 理解できるか、信頼できるか、引っかかる所（自由回答） |
 
-最後に、人が確かめる項目の一覧（`../../templates/review-checklist.md`）を本人に渡します。事実と数字の確認は人の仕事で、このスキルでは完了扱いにしません。
+最後に、人が確かめる項目の一覧（`${CLAUDE_PLUGIN_ROOT}/templates/review-checklist.md`）を本人に渡します。事実と数字の確認は人の仕事で、このスキルでは完了扱いにしません。
 
-スクリプトは、このスキルのディレクトリから見て `../../scripts/` にあります。以下では `<scripts>` と書きます。
+スクリプトは、下のコマンドの形のまま動かします。頭の `JA_PROOFREAD_DATA=…` は、書いた直後のフックと同じデータ置き場（textlint の依存、検出と誤検知の記録）を使うためのものです。外すと、依存と記録が別の場所に分かれます。
 
 ## 0. 準備
 
@@ -25,39 +25,40 @@ description: 日本語の文書・スライド・報告書を校正するとき�
 - 初回は依存（textlint）を入れます。数十秒かかります。
 
 ```bash
-node <scripts>/ensure-deps.mjs
+JA_PROOFREAD_DATA="${CLAUDE_PLUGIN_DATA}" node "${CLAUDE_PLUGIN_ROOT}/scripts/ensure-deps.mjs"
 ```
 
 ## 1. 機械チェック
 
 ```bash
-node <scripts>/proofread.mjs --profile slide 対象.md        # 一覧で見る
-node <scripts>/proofread.mjs --profile slide --json 対象.md # 件数を数えるとき
+JA_PROOFREAD_DATA="${CLAUDE_PLUGIN_DATA}" node "${CLAUDE_PLUGIN_ROOT}/scripts/proofread.mjs" --profile slide 対象.md        # 一覧で見る
+JA_PROOFREAD_DATA="${CLAUDE_PLUGIN_DATA}" node "${CLAUDE_PLUGIN_ROOT}/scripts/proofread.mjs" --profile slide --json 対象.md # 件数を数えるとき
 ```
 
 - 「必ず」「直したい」「参考」の件数を控えます。報告で修正前と修正後を比べるためです。
+- 「textlint が動かなかった」と出たら、表記と文法の指摘は確かめられていません。0件と報告せず、そのことを報告に書きます。
 - 指摘は候補です。文脈を見て、誤検知なら直さずに記録します（grow-ledger スキルの「誤検知」）。誤検知を記録しないと、効かない型が台帳に残り続けます。
-- 本人が過去に自分で書いた文章の基準（`.ja-proofread.json` の `baseline`）があれば、`node <scripts>/stylometry.mjs compare --baseline 基準.json 対象.md` も実行します。結果は目安で、合否には使いません。
+- 本人が過去に自分で書いた文章の基準（`.ja-proofread.json` の `baseline`）があれば、`node "${CLAUDE_PLUGIN_ROOT}/scripts/stylometry.mjs" compare --baseline 基準.json 対象.md` も実行します。結果は目安で、合否には使いません。
 
 ## 2. 独立レビュー
 
 `structure-reviewer` サブエージェントを1体起動します。渡すのは次の3つだけにします。書いた経緯や意図は渡しません。先入観なく読ませるためです。
 
 - 対象ファイルのパス
-- 台帳のパス（`../../data/ledger.json`）
+- 台帳のパス（`${CLAUDE_PLUGIN_ROOT}/data/ledger.json`）
 - 読者は誰か（1行）
 
 返ってきた指摘のうち「台帳にない型」は、6の候補に回します。
 
 ## 3. 修正
 
-- 1と2の指摘を直します。意味・数字・出典は変えません。言い換えで事実がずれそうなら、直さずに本人に聞きます。
+- 1と2の指摘を直します。意味・数字・出典は変えません。言い換えで事実がずれそうな箇所は直さず、本人に聞きます。
 - 直したら、1の機械チェックをもう一度実行し、件数を控えます。
 - 本人の文書を直接書き換えてよいかは、本人の依頼によります。頼まれていなければ、直した版を別に作るか、差分を見せます。
 
 ## 4. 読者役テスト（フレッシュアイズ）
 
-`../../templates/reader-test.md` に従って、読者役を2〜3体、別々のサブエージェントとして起動します。
+`${CLAUDE_PLUGIN_ROOT}/templates/reader-test.md` に従って、読者役を2〜3体、別々のサブエージェントとして起動します。
 
 - 1体は必ず「AIの文章に抵抗がある読者」にします。
 - 読者役には、対象の本文と人物像だけを渡します。書き手が誰か、AIを使ったか、校正したかは伝えません。
@@ -69,7 +70,7 @@ node <scripts>/proofread.mjs --profile slide --json 対象.md # 件数を数え�
 
 ## 5. 人の確認
 
-`../../templates/review-checklist.md` を、対象に合わせて埋めて本人に渡します。とくに数字・固有名詞・引用・日付は、出典に当たったかどうかを項目ごとに書きます。
+`${CLAUDE_PLUGIN_ROOT}/templates/review-checklist.md` を、対象に合わせて埋めて本人に渡します。とくに数字・固有名詞・引用・日付は、出典に当たったかどうかを項目ごとに書きます。
 
 ## 6. 新しい型の候補
 

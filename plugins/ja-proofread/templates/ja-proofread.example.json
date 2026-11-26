@@ -2,9 +2,9 @@
   "profile": "doc",
   "profiles": { "slides/**": "slide", "**/*.slide.md": "slide" },
   "include": ["docs/**/*.md", "slides/**/*.md"],
-  "exclude": ["**/node_modules/**", "**/CHANGELOG.md"],
+  "exclude": ["**/node_modules/**", "**/CHANGELOG.md", ".claude/**", "**/CLAUDE.md"],
   "disable": [],
-  "prh": ["./proofread/team-prh.yml"],
+  "prh": [],
   "baseline": "~/.ja-proofread/baseline.json",
   "hook": { "enabled": true, "blockOn": "must" },
   "notion": { "autoRegisterCandidates": false }
