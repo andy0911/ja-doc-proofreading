@@ -1,0 +1,15 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "ja-doc-proofreading",
+  "description": "AIで書いた日本語ドキュメントを校正し、見つけた「AIっぽい型」を台帳に足して育てていくプラグイン集",
+  "owner": { "name": "andy" },
+  "plugins": [
+    {
+      "name": "ja-proofread",
+      "source": "./plugins/ja-proofread",
+      "description": "書く前の禁止パターン、textlint、独立レビュー、読者役テストの4段で日本語文書を校正し、型の台帳を育てる",
+      "category": "productivity",
+      "tags": ["japanese", "proofreading", "textlint", "writing"]
+    }
+  ]
+}

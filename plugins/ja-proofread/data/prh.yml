@@ -1,0 +1,20 @@
+# 表記の統一辞書（prh 形式）。承認した表記ゆれだけを足す。
+# 書き方: https://github.com/prh/prh/blob/master/misc/prh.yml
+version: 1
+rules:
+  - expected: お得
+    patterns:
+      - おトク
+    prh: 「おトク」と「お得」が混ざりやすいため「お得」にそろえる（2026-11 販売改善資料の試行）
+  - expected: ユーザー
+    patterns:
+      - /ユーザ(?!ー)/
+  - expected: サーバー
+    patterns:
+      - /サーバ(?!ー)/
+  - expected: できる
+    patterns:
+      - 出来る
+  - expected: など
+    patterns:
+      - 等々

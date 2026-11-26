@@ -1,0 +1,21 @@
+{
+  "description": "ja-proofread: 依存の準備と、文書を書いた直後の自動校正",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/ensure-deps.mjs\" --quiet", "timeout": 300 }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hook-post-edit.mjs\"", "timeout": 60 }
+        ]
+      }
+    ]
+  }
+}

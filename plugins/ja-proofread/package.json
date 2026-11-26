@@ -1,0 +1,13 @@
+{
+  "name": "ja-proofread-deps",
+  "private": true,
+  "description": "ja-proofread が使う textlint とルール。CLAUDE_PLUGIN_DATA 側に入れて使う",
+  "scripts": { "test": "node tests/run.mjs" },
+  "dependencies": {
+    "textlint": "16.1.3",
+    "@textlint-ja/textlint-rule-preset-ai-writing": "1.7.2",
+    "textlint-rule-preset-ja-technical-writing": "12.1.0",
+    "textlint-rule-prh": "6.1.1",
+    "textlint-filter-rule-comments": "1.3.0"
+  }
+}

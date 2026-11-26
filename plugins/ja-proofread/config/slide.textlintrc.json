@@ -1,0 +1,30 @@
+{
+  "plugins": {},
+  "filters": {
+    "comments": true
+  },
+  "rules": {
+    "@textlint-ja/preset-ai-writing": true,
+    "preset-ja-technical-writing": {
+      "sentence-length": {
+        "max": 80
+      },
+      "max-comma": {
+        "max": 3
+      },
+      "max-kanji-continuous-len": {
+        "max": 7
+      },
+      "ja-no-mixed-period": false,
+      "no-exclamation-question-mark": false,
+      "ja-no-weak-phrase": false,
+      "max-ten": false,
+      "no-mix-dearu-desumasu": {
+        "preferInHeader": "",
+        "preferInBody": "",
+        "preferInList": "",
+        "strict": false
+      }
+    }
+  }
+}

@@ -1,0 +1,11 @@
+{
+  "profile": "doc",
+  "profiles": { "slides/**": "slide", "**/*.slide.md": "slide" },
+  "include": ["docs/**/*.md", "slides/**/*.md"],
+  "exclude": ["**/node_modules/**", "**/CHANGELOG.md"],
+  "disable": [],
+  "prh": ["./proofread/team-prh.yml"],
+  "baseline": "~/.ja-proofread/baseline.json",
+  "hook": { "enabled": true, "blockOn": "must" },
+  "notion": { "autoRegisterCandidates": false }
+}

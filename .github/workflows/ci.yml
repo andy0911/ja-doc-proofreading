@@ -1,0 +1,26 @@
+name: test
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plugins/ja-proofread
+    env:
+      JA_PROOFREAD_DATA: ${{ runner.temp }}/ja-proofread
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: 依存を入れる
+        run: node scripts/ensure-deps.mjs
+      - name: 台帳の形を確かめる
+        run: node scripts/ledger.mjs validate
+      - name: テスト
+        run: npm test
