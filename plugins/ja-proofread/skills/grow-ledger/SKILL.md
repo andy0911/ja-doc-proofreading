@@ -110,9 +110,10 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/stylometry.mjs" compare --baseline 基準.js
 node plugins/ja-proofread/scripts/ledger.mjs apply approved.json
 ```
 
-   続けて確かめます。
+   続けて、1ファイルで入る同梱の一式（`dist/ja-proofread-setup.mjs`）を新しい版で作り直し、確かめます。作り直すと、`CHANGELOG.md` の新しい版の項に、そのファイルの sha256 の行が足されます。作り直し忘れは CI とテストで落ちます。
 
 ```bash
+node plugins/ja-proofread/scripts/build-setup.mjs
 node plugins/ja-proofread/scripts/ledger.mjs validate
 npm test --prefix plugins/ja-proofread
 ```
@@ -142,10 +143,13 @@ claude plugin marketplace update ja-doc-proofreading
 claude plugin update ja-proofread@ja-doc-proofreading
 ```
 
-- プロジェクトに同梱している場合（クラウドセッション向け）は、マーケットプレイスの作業コピーを最新にしてから（`git pull`）、作業コピーのスクリプトで同梱し直し、同梱した版を入れ替えます。同梱した版のスクリプト（`.claude/ja-proofread/scripts/`）からは実行できません。
+- プロジェクトに同梱している場合（クラウドセッション向け）は、1ファイルで入る同梱の一式を取り直し、プロジェクトの根で動かして、同梱した版を入れ替えます。手元のプラグインは要らず、クラウドセッションの中でも動きます。終わったらコミットしてプッシュし、新しいセッションを始めます。同梱した版のスクリプト（`.claude/ja-proofread/scripts/`）からは同梱し直せません。
 
 ```bash
-node <マーケットプレイスの作業コピー>/plugins/ja-proofread/scripts/install-into-project.mjs <プロジェクト>
+curl -fsSLo /tmp/ja-proofread-setup.mjs https://raw.githubusercontent.com/andy0911/ja-doc-proofreading/main/dist/ja-proofread-setup.mjs
+node /tmp/ja-proofread-setup.mjs <プロジェクト>
 ```
+
+  マーケットプレイスの作業コピーがあるときは、`git pull` のあと `node <マーケットプレイスの作業コピー>/plugins/ja-proofread/scripts/install-into-project.mjs <プロジェクト>` でも同じです。
 
 <!-- plugin-only -->プラグインとして入れている環境なら、`claude plugin marketplace update ja-doc-proofreading` のあと `node ~/.claude/plugins/marketplaces/ja-doc-proofreading/plugins/ja-proofread/scripts/install-into-project.mjs <プロジェクト>` でも同じです。マーケットプレイスの写し（`marketplaces/` の下）は update で最新になりますが、`${CLAUDE_PLUGIN_ROOT}` は今のセッションが読み込んだキャッシュの版（`cache/` の下）を指すので、そちらから動かすと古い版が同梱されます。`CLAUDE_CODE_PLUGIN_CACHE_DIR` を設定しているときは、`~/.claude/plugins` をその場所に読み替えます。<!-- /plugin-only -->

@@ -22,6 +22,8 @@ jobs:
         run: node scripts/ensure-deps.mjs
       - name: 台帳の形を確かめる
         run: node scripts/ledger.mjs validate
+      - name: 同梱の一式（dist/ja-proofread-setup.mjs）が最新か確かめる
+        run: node scripts/build-setup.mjs --check
       - name: テスト
         run: npm test
 

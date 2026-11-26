@@ -1,5 +1,12 @@
 # 変更履歴
 
+## 0.1.8（2026-11-26）
+- 同梱の一式 `dist/ja-proofread-setup.mjs` の sha256：`f20ebcd204b08b5562b94ec44ca5334c325c44b7268f3a7e0081778c7412e8df`
+- 1ファイルで入る同梱の一式 `dist/ja-proofread-setup.mjs` を足した。claude.ai/code のクラウドセッションには手元のプラグインの写し（`~/.claude/plugins/marketplaces/...`）がなく、GitHub のプロキシがセッションに付いていないリポジトリのクローンや archive を通さないため、これまでの `install-into-project.mjs` ではセッションの中だけで同梱できなかった。新しい一式は依存のない Node のスクリプトで、同梱に要るファイル（`install-into-project.mjs` がコピーするものと、その元になるスキル・サブエージェント）を base64 で中に持つ。動かすと、各ファイルの sha256 をすべて確かめてから一時ディレクトリに書き出し、その中の `install-into-project.mjs` を動かす（結果は `install-into-project.mjs` で同梱したときと同じ。`--remove` も使える）。対象は引数のリポジトリ、省略時はカレントディレクトリで、git の作業コピーの根でなければ何も書かずに止まる。最後に、同梱したものの名前だけのコミットするパスと `git add … && git commit … && git push` の例を表示する。セッションの中で `curl -fsSLo /tmp/ja-proofread-setup.mjs https://raw.githubusercontent.com/andy0911/ja-doc-proofreading/main/dist/ja-proofread-setup.mjs` と `node /tmp/ja-proofread-setup.mjs` を実行すれば済む。
+- `scripts/build-setup.mjs` を足した。一式を作り、この変更履歴の今の版の項に、そのファイルの sha256 の行を書く。`--check` は、作り直したものが dist のファイルとバイト単位で同じか、sha256 の行があるかを確かめる。CI とテストで確かめるので、古いまま出荷しない。`grow-ledger` スキルの反映の手順に、作り直す1行を足した。
+- `grow-ledger` スキル：同梱している場合の新しい版への入れ替えを、一式を取り直して動かす手順にした（手元のプラグインがなくても、クラウドセッションの中でも動く）。
+- 文書：install-cloud の「まずどれを使うか」と方法Aを、クラウドセッションの中だけで済む手順（curl と node、コミットとプッシュ、新しいセッション）を最初に出す形に書き直した。版を固定する URL（`main` の代わりにコミットの SHA）と `sha256sum -c` で確かめる1行、手元から同じファイルで同梱する手順を書いた。これまでの `install-into-project.mjs` の手順は別の手として残した。claude.ai/customize/plugins でアカウントに足す方法（B1）は、公式ではクラウドセッションにも読み込まれるとされるが、持ち主の環境ではその画面でこのマーケットプレイスの追加ができなかったと書き、主な手順から外して参考に回した。困ったときの表に、curl が 403 になる・つながらないとき（ネットワークが None、raw.githubusercontent.com が許可リストにない）、新しいセッションを始めないとフックが動かないとき、作業コピーの根でないとき、sha256 が合わないときを足した。README の入れ方と中身も合わせた。
+
 ## 0.1.7（2026-11-26）
 - 独立レビューの指摘を直した。台帳の型は変えていない（台帳の版は plugin.json とそろえて 0.1.7 にした）。
 - 正規表現の検査：u なしの `\u{N}`・`\p{…}`・`\P{…}` を1文字と見なし、`(?:\u{2}|u)+す`（u なしでは `\u{2}` は「u を2回」）を重ならない選択として通していたのを直した。u なしでこれらで始まる選択肢は、安全と確かめられない選択として拒否する。台帳に書くと validate は通り、フックが約54秒かかって textlint の指摘が失われていた。`minLength` も u なしの `\u{0}` を長さ0と数える。

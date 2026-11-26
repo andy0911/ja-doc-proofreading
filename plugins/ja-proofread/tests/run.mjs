@@ -895,6 +895,59 @@ const wbOut2 = run([S("install-into-project.mjs"), wbProj]).stdout;
 ok("2回目の同梱では .bak を作らないので、.bak の案内を出さない", !wbOut2.includes("元のファイルは settings.json.bak") && !/もともと無かった/.test(wbOut2) && existsSync(join(wbProj, ".claude/settings.json.bak")), wbOut2);
 ok("同梱したスキルに、プラグインのデータ置き場の説明が残らず、XDG_CACHE_HOME のときの場所も書く", ![vsk, vgl].some((x) => /JA_PROOFREAD_DATA=…|プラグインのデータ置き場/.test(x)) && /データ置き場は、書いた直後のフックと同じ既定の場所/.test(vsk) && /データ置き場は、書いた直後のフックと同じ既定の場所/.test(vgl) && [vsk, vgl].every((x) => /\$XDG_CACHE_HOME\/ja-proofread\//.test(x)));
 
+// 20. 1ファイルで入る同梱の一式（dist/ja-proofread-setup.mjs。クラウドセッションの中で、手元のプラグインなしに同梱する）
+{
+  const DIST = resolve(ROOT, "..", "..", "dist", "ja-proofread-setup.mjs");
+  r = run([S("build-setup.mjs"), "--check"]);
+  ok("dist/ja-proofread-setup.mjs は作り直したものと同じで、CHANGELOG の今の版の項にその sha256 がある", r.status === 0, r.stdout + r.stderr);
+  const outDir = tmp("jp-setupout-");
+  r = run([S("build-setup.mjs"), "--out", join(outDir, "s.mjs")]);
+  ok("作り直すと dist のファイルとバイト単位で同じ", r.status === 0 && existsSync(DIST) && readFileSync(join(outDir, "s.mjs")).equals(readFileSync(DIST)), r.stderr);
+  const gitInit = (d) => { spawnSync("git", ["init", "-q"], { cwd: d }); return d; };
+  const viaSetup = gitInit(tmp("jp-setup-"));
+  const viaInstall = gitInit(tmp("jp-setupcmp-"));
+  r = run([DIST], { cwd: viaSetup });
+  run([S("install-into-project.mjs"), viaInstall]);
+  // 2つのプロジェクトの .claude/ と .ja-proofread.json を、パスと中身で比べる
+  const tree = (d) => {
+    const out = [];
+    const walk = (rel) => { for (const n of readdirSync(join(d, rel)).sort()) { const p = rel ? `${rel}/${n}` : n; if (statSync(join(d, p)).isDirectory()) walk(p); else out.push(p + "\0" + createHash("sha256").update(readFileSync(join(d, p))).digest("hex")); } };
+    walk(".claude");
+    out.push(".ja-proofread.json\0" + createHash("sha256").update(readFileSync(join(d, ".ja-proofread.json"))).digest("hex"));
+    return out.join("\n");
+  };
+  ok("引数なしで、カレントディレクトリのリポジトリに install-into-project と同じものを書く", r.status === 0 && safe(() => tree(viaSetup) === tree(viaInstall)), r.stdout.slice(0, 300) + r.stderr);
+  const sst = json(readFileSync(join(viaSetup, ".claude/settings.json"), "utf8"));
+  const cmds = Object.values(sst.hooks || {}).flatMap((gs) => gs.flatMap((g) => g.hooks.map((h) => h.command)));
+  ok("フックのコマンドは $CLAUDE_PROJECT_DIR/.claude/ja-proofread/scripts/ を指す", cmds.length === 2 && cmds.every((c) => c.includes('"$CLAUDE_PROJECT_DIR/.claude/ja-proofread/scripts/')), cmds.join(" | "));
+  const addLine = r.stdout.split("\n").find((l) => l.includes("git add ")) || "";
+  ok("最後に、同梱したものの名前だけのコミットするパスと git add … && git commit … && git push の例を出す", /コミットするパス：\.claude\/ja-proofread \.claude\/skills\/ja-proofread-grow-ledger /.test(r.stdout) && /git add \.claude\/ja-proofread .*\.ja-proofread\.json && git commit -m "ja-proofread v[\d.]+ を同梱" && git push/.test(addLine) && !addLine.includes("ja-proofread-*") && (r.stdout.match(/コミットするパス：/g) || []).length === 1 && /新しいセッションを始めて/.test(r.stdout), r.stdout);
+  write(viaSetup, "doc.md", readFileSync(join(ROOT, "tests/fixtures/ai-like.md"), "utf8"));
+  const hr = run([join(viaSetup, ".claude/ja-proofread/scripts/hook-post-edit.mjs")], { input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: join(viaSetup, "doc.md") }, cwd: viaSetup }), env: { CLAUDE_PROJECT_DIR: viaSetup } });
+  ok("一式で同梱したフックが動き、必ず直す指摘を返す", /"decision":"block"/.test(hr.stdout) && /必ず直す [1-9]/.test(hr.stdout), hr.stdout.slice(0, 200) + hr.stderr);
+  // 作業コピーの根でないところ、git でないところ、壊れたファイルでは何も書かない
+  const sub = join(gitInit(tmp("jp-setupsub-")), "sub");
+  mkdirSync(sub);
+  r = run([DIST, sub]);
+  ok("git の作業コピーの根でなければ止め、何も書かない", r.status === 1 && /作業コピーの根ではありません/.test(r.stderr) && readdirSync(sub).length === 0 && !existsSync(join(sub, "..", ".claude")), r.stderr);
+  const nogitDir = tmp("jp-setupnogit-");
+  r = run([DIST, nogitDir], { env: { GIT_CEILING_DIRECTORIES: dirname(nogitDir) } });
+  ok("git の作業コピーでなければ止め、何も書かない", r.status === 1 && /git の作業コピーではありません/.test(r.stderr) && readdirSync(nogitDir).length === 0, r.stderr);
+  const src = readFileSync(DIST, "utf8");
+  const m = src.match(/\["scripts\/lib\.mjs","([0-9a-f])/);
+  const bad = write(outDir, "bad.mjs", m ? src.replace(m[0], m[0].slice(0, -1) + (m[1] === "0" ? "1" : "0")) : "");
+  const badProj = gitInit(tmp("jp-setupbad-"));
+  r = run([bad, badProj]);
+  ok("中のファイルの sha256 が合わなければ、何も書かずに止める", !!m && r.status === 1 && /sha256 が合わない/.test(r.stderr) && readdirSync(badProj).filter((f) => f !== ".git").length === 0, r.stderr);
+  // 同梱をコミットしてからやめる（ステージの例は、コミットしていたものだけを出す）
+  spawnSync("git", ["add", "-A"], { cwd: viaSetup });
+  spawnSync("git", ["-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-qm", "vendor"], { cwd: viaSetup });
+  r = run([DIST, viaSetup, "--remove"]);
+  ok("--remove で同梱をやめ、.ja-proofread.json は残し、git add -A の例を出す", r.status === 0 && !existsSync(join(viaSetup, ".claude")) && existsSync(join(viaSetup, ".ja-proofread.json")) && /git add -A -- \.claude\/ja-proofread /.test(r.stdout), r.stdout + r.stderr);
+  r = run([DIST, "--version"]);
+  ok("一式の版は plugin.json と同じ", r.stdout.trim() === json(readFileSync(join(ROOT, ".claude-plugin/plugin.json"), "utf8")).version, r.stdout);
+}
+
 // 12. 一時ディレクトリを残さない（このテストが作ったものは、ここで消す）
 // 子プロセスが作る ja-proofread-* は、子プロセスが終わってから消える。終わりきるまで（最大10秒）待ってから確かめる
 const childLeft = () => { try { return readdirSync(CHILD_TMP).filter((f) => /^(jp-|ja-proofread-)/.test(f)); } catch { return []; } };
