@@ -40,7 +40,7 @@ f="$(mktemp -d)/ja-proofread-setup.mjs" && curl -fsSLo "$f" https://raw.githubus
 
 ## 2. プロジェクト指示に貼る
 
-1. の最後に「貼る部分」が表示されます（`/mnt/project-files/ja-proofread-kit/PROJECT-INSTRUCTIONS.md` の、「貼る部分ここから」と「貼る部分ここまで」の間と同じです。約2,100字）。これを Project settings > Memory > Project instructions に貼ります。プロジェクト指示は最大16,000字なので、ほかの指示と一緒に置けます。プロジェクトの会話で「`/mnt/project-files/ja-proofread-kit/PROJECT-INSTRUCTIONS.md` の貼る部分をプロジェクト指示に足して」と頼んでもかまいません。
+1. の最後に「貼る部分」が表示されます（`/mnt/project-files/ja-proofread-kit/PROJECT-INSTRUCTIONS.md` の、「貼る部分ここから」と「貼る部分ここまで」の間と同じです。kit を `/mnt/project-files/ja-proofread-kit` に書いたとき約1,500字。kit の場所が長いほど増えます）。これを Project settings > Memory > Project instructions に貼ります。プロジェクト指示は最大16,000字なので、ほかの指示と一緒に置けます。プロジェクトの会話で「`/mnt/project-files/ja-proofread-kit/PROJECT-INSTRUCTIONS.md` の貼る部分をプロジェクト指示に足して」と頼んでもかまいません。
 
 貼る部分には、次のことが書いてあります。
 
