@@ -79,7 +79,7 @@ d="$(mktemp -d)" && curl -fsSLo "$d/ja-proofread-setup.mjs" https://raw.githubus
 (cd "<kit>" && echo "<値>  kit.sha256" | sha256sum -c --quiet - && sha256sum -c --quiet kit.sha256) && node "<kit>/scripts/ensure-deps.mjs" && node "<kit>/scripts/proofread.mjs" <ファイル>
 ```
 
-合わなければ校正せず、本人に伝えます。照らし合わせに入るのは kit の中身だけで、記録の置き場（`ja-proofread-data`）は入りません。貼る部分の値はプロジェクト指示にあり、スレッドからは変えられないので、kit と一覧を一緒に書き換えても見つかります。kit の外にある依存（`~/.cache/ja-proofread/deps`）は、スレッドごとに lock ファイルの版で入れ直します。kit の中に `node_modules` を置かれても使いません。
+合わなければ校正せず、本人に伝えます。この1行は `cd`・`echo`・`sha256sum` をつないだ形なので、スレッドの権限の設定によっては、実行に許可を求められます（`claude -p` で試したときは、許可が要るとして止まり、スレッドが2つの照らし合わせを分けて実行してから校正しました）。許可を求められたら、そのスレッドで許可します。照らし合わせに入るのは kit の中身だけで、記録の置き場（`ja-proofread-data`）は入りません。貼る部分の値はプロジェクト指示にあり、スレッドからは変えられないので、kit と一覧を一緒に書き換えても見つかります。kit の外にある依存（`~/.cache/ja-proofread/deps`）は、スレッドごとに lock ファイルの版で入れ直します。kit の中に `node_modules` を置かれても使いません。
 
 ## 3. 新しいスレッドから使う
 
