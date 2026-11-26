@@ -23,7 +23,8 @@ const CHANGELOG = join(REPO, "CHANGELOG.md");
 // build-setup.mjs 自身も、同梱先では使わないので入れない（install-into-project.mjs もコピーしない）
 const DIRS = [".claude-plugin", "agents", "config", "data", "rules", "scripts", "skills", "templates"];
 const TOP_FILES = ["package.json", "package-lock.json"];
-const SELF = "scripts/build-setup.mjs";
+// 一式を作るスクリプト（build-setup.mjs、claude.ai 向けのスキルを作る build-claude-ai-skill.mjs）は、同梱先では使わないので入れない
+const NOT_EMBEDDED = new Set(["scripts/build-setup.mjs", "scripts/build-claude-ai-skill.mjs"]);
 
 const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
 
@@ -33,7 +34,7 @@ const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
 export function collect() {
   const r = spawnSync("git", ["ls-files", "-z", "--", ...DIRS, ...TOP_FILES], { cwd: ROOT, encoding: "utf8" });
   if (r.error || r.status !== 0) throw new Error(`git ls-files でファイルを決められないので止めました。このリポジトリの git の作業コピーの中で動かしてください（${r.error ? r.error.message : (r.stderr || "").trim()}）`);
-  const files = r.stdout.split("\0").filter((p) => p && p !== SELF);
+  const files = r.stdout.split("\0").filter((p) => p && !NOT_EMBEDDED.has(p));
   if (!files.some((p) => p === "scripts/install-into-project.mjs")) throw new Error("git が追跡しているファイルに scripts/install-into-project.mjs がないので止めました。このリポジトリの git の作業コピーの中で動かしてください");
   const bad = files.filter((p) => { try { return !lstatSync(join(ROOT, p)).isFile(); } catch { return true; } });
   if (bad.length) throw new Error(`git が追跡しているのに、ふつうのファイルとして読めないものがあります：${bad.join(" ")}`);

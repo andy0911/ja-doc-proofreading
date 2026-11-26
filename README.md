@@ -22,9 +22,12 @@ claude plugin marketplace add andy0911/ja-doc-proofreading
 claude plugin install ja-proofread@ja-doc-proofreading --scope user
 ```
 
-- 手元の Claude Code：[docs/install-local.md](docs/install-local.md)
-- クラウドセッション：[docs/install-cloud.md](docs/install-cloud.md)
-- claude.ai/code の Projects（リポジトリがなくてもよい）：[docs/install-projects.md](docs/install-projects.md)
+| 使う場所 | 入れ方 | 手順 |
+|---|---|---|
+| 手元の Claude Code | 上の2行でプラグインを入れる | [docs/install-local.md](docs/install-local.md) |
+| クラウドセッション（claude.ai/code） | 校正したいリポジトリに同梱する | [docs/install-cloud.md](docs/install-cloud.md) |
+| claude.ai/code の Projects（リポジトリがなくてもよい） | プロジェクトのフォルダーに kit を置き、プロジェクト指示に足す | [docs/install-projects.md](docs/install-projects.md) |
+| claude.ai のチャットのプロジェクト（claude.ai の Projects） | スキルの zip を Customize > Skills で上げ、プロジェクトの指示に足す | [docs/install-claude-ai.md](docs/install-claude-ai.md) |
 
 クラウドセッション（claude.ai/code）には、上のコマンドで入れたプラグインは持ち込まれません。校正したいリポジトリを1つだけ選んでセッションを始め、その中で次の1行を実行し（Claude に頼んでもよい）、表示されたコマンド（`git add … && git commit … && git push -u origin HEAD`）でコミットしてプッシュしてから、新しいセッションを始めます。手元にプラグインを入れていなくても済みます。版の固定や sha256 の確かめ方、手元からの同梱、やめ方は [docs/install-cloud.md](docs/install-cloud.md) の方法Aです。同梱すると、同梱先のリポジトリに Notion の候補一覧の場所が載ります。候補一覧の中身は Notion の共有設定で守られますが、場所を知られたくないリポジトリ（公開・社外共有など）には同梱しないでください。
 
@@ -35,6 +38,8 @@ curl -fsSLo /tmp/ja-proofread-setup.mjs https://raw.githubusercontent.com/andy09
 claude.ai/customize/plugins でアカウントにマーケットプレイスを足す方法は、持ち主の環境では追加ができなかったので、参考として [docs/install-cloud.md](docs/install-cloud.md) の B1 に回しています。
 
 claude.ai/code の Projects では、プロジェクトのどれかのスレッドで上の1行の最後に `--project-kit /mnt/project-files/ja-proofread-kit` を足して実行し、プロジェクトの会話で「`/mnt/project-files/ja-proofread-kit/PROJECT-INSTRUCTIONS.md` の貼る部分を、一字も変えずにプロジェクト指示に足して」と頼みます。新しいスレッドから、書いた・直した文書を毎回、kit が書き換えられていないかを照らし合わせてから校正するようになります。フックの代わりにプロジェクト指示で頼むので、Claude が飛ばすことがあります。詳しくは [docs/install-projects.md](docs/install-projects.md) です。
+
+claude.ai のチャットのプロジェクト（claude.ai の Projects。プロジェクトの指示・ファイル・スキルを入れて使うもの）では、[dist/claude-ai/ja-proofread-skill.zip](https://raw.githubusercontent.com/andy0911/ja-doc-proofreading/main/dist/claude-ai/ja-proofread-skill.zip) を Customize > Skills > 「+」> Create skill > Upload a skill で上げ、[dist/claude-ai/PROJECT-INSTRUCTIONS.md](dist/claude-ai/PROJECT-INSTRUCTIONS.md) の貼る部分をプロジェクトの指示に足します。コード実行を使える設定にしておく必要があります。フックはないので、プロジェクトの指示で毎回の校正を頼みます。Claude が飛ばすことがあります。詳しくは [docs/install-claude-ai.md](docs/install-claude-ai.md) です。
 
 新しい版が出たら、次を実行して Claude Code を起動し直します（起動中のセッションなら `/reload-plugins` でも反映できます）。このマーケットプレイスは自動更新が既定でオフです。
 
@@ -49,6 +54,7 @@ claude plugin update ja-proofread@ja-doc-proofreading
 .claude-plugin/marketplace.json   マーケットプレイスの定義
 .github/                          テストと、版を上げ忘れたプルリクエストを落とす CI
 dist/ja-proofread-setup.mjs       1ファイルで入る同梱の一式（クラウドセッションの中で curl と node で同梱する。build-setup.mjs が作る）
+dist/claude-ai/                   claude.ai のチャットに上げるスキルの zip と、プロジェクトの指示に足す文（build-claude-ai-skill.mjs が作る）
 plugins/ja-proofread/
   .claude-plugin/plugin.json      プラグインの定義（版はここだけに書き、ここで上げる。marketplace.json には書かない）
   skills/                         write、proofread、grow-ledger
@@ -63,6 +69,7 @@ plugins/ja-proofread/
   scripts/regex-safety.mjs        台帳と辞書の正規表現が遅くならないかの検査
   scripts/prh-load.mjs            プロジェクトの prh 辞書を別のプロセスで読む（時間で打ち切るため）
   scripts/build-setup.mjs         dist/ja-proofread-setup.mjs を作る（--check で古くないか確かめる）
+  scripts/build-claude-ai-skill.mjs  dist/claude-ai/ を作る（--check で古くないか確かめる）
   package.json、package-lock.json textlint とルールの版の固定
   templates/                      読者役テスト、人の確認項目、プロジェクト設定の例
   tests/                          動作確認（npm test）
@@ -73,9 +80,9 @@ plugins/ja-proofread/
 1. 台帳にない型の候補は、読者役テストの自由回答、独立レビューの「台帳にない型」、自分の文章との頻度比較、誤検知の記録の4か所から出ます。
 2. 候補を Notion の「文章校正 台帳候補」に1件1ページで登録するのは、本人が頼んだときか、プロジェクトの設定で `notion.autoRegisterCandidates` が `true` のときだけです。それ以外は候補を一覧にして本人に聞きます。
 3. 「承認」にするのは本人だけ、という約束です。Claude への指示で決めているだけで、Notion の権限で止めているわけではありません。
-4. 承認された候補を、このリポジトリの作業コピーの根で `node plugins/ja-proofread/scripts/ledger.mjs apply approved.json` にかけると、台帳と版が上がり、`CHANGELOG.md` に記録されます。全件を確かめてから書くので、1件でも問題があればどのファイルも変わりません。続けて `node plugins/ja-proofread/scripts/build-setup.mjs` で同梱の一式を新しい版で作り直します。
+4. 承認された候補を、このリポジトリの作業コピーの根で `node plugins/ja-proofread/scripts/ledger.mjs apply approved.json` にかけると、台帳と版が上がり、`CHANGELOG.md` に記録されます。全件を確かめてから書くので、1件でも問題があればどのファイルも変わりません。続けて `node plugins/ja-proofread/scripts/build-setup.mjs` と `node plugins/ja-proofread/scripts/build-claude-ai-skill.mjs` で、同梱の一式と claude.ai のスキルを新しい版で作り直します。
 5. プルリクエストを出したら、Notion の行の「状態」を「PR中」にし、「台帳ID」「反映版」「PR」の列を埋めます。マージしたら「反映済み」にします。
-6. 利用者は、上の「入れ方」の update の2つのコマンドを実行し、起動し直すと新しい版を使えます。
+6. 利用者は、上の「入れ方」の update の2つのコマンドを実行し、起動し直すと新しい版を使えます。claude.ai のチャットでは、新しい zip を上げ直します。
 
 ## テスト
 
@@ -85,7 +92,7 @@ node scripts/ensure-deps.mjs
 npm test
 ```
 
-`plugins/ja-proofread/` の中を変えたら、`node scripts/build-setup.mjs` で `dist/ja-proofread-setup.mjs` を作り直します（`CHANGELOG.md` の今の版の項に、そのファイルの sha256 の行が書かれます）。作り直し忘れは、CI の `build-setup.mjs --check` とテストで落ちます。
+`plugins/ja-proofread/` の中を変えたら、`node scripts/build-setup.mjs` で `dist/ja-proofread-setup.mjs` を、`node scripts/build-claude-ai-skill.mjs` で `dist/claude-ai/` を作り直します（`CHANGELOG.md` の今の版の項に、それぞれの sha256 の行が書かれます）。作り直し忘れは、CI の `build-setup.mjs --check`・`build-claude-ai-skill.mjs --check` とテストで落ちます。
 
 ## 使っているもの
 

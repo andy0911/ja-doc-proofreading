@@ -1,5 +1,16 @@
 # 変更履歴
 
+## 0.1.14（2026-11-26）
+- 同梱の一式 `dist/ja-proofread-setup.mjs` の sha256：`135d23dd36baf8d9f3537b85085bcd57cdf83736b0bfe3a2e58d5473f67319e4`
+- claude.ai のスキル `dist/claude-ai/ja-proofread-skill.zip` の sha256：`59f1af1a546cbe9d01aecf40bb0384b2f6ee3bdf250225a913b418b69a40c3c6`
+- claude.ai のチャットのプロジェクト（claude.ai の Projects。プロジェクトの指示・ファイル・スキルを入れて使うもの）で使えるようにした。台帳の型は変えていない（台帳の版は plugin.json とそろえて 0.1.14 にした）。
+- `dist/claude-ai/ja-proofread-skill.zip`：Customize > Skills で上げるスキルの zip。最上位は `ja-proofread/` フォルダだけで、`SKILL.md`（チャット向けの入口。name は `ja-proofread`）、校正の一式（`scripts/`・`rules/`・`data/`・`config/`・`templates/`・`package.json`・`package-lock.json`）、チャット向けに書き直した手順（`references/write.md`・`proofread.md`・`grow-ledger.md`、`references/agents/` の役の指示）、印の `skill.json` を入れる。`node_modules`、隠しファイル、同梱・kit・フックのスクリプトは入れない。依存は会話の中で `ensure-deps.mjs` が `npm ci` で入れる。
+- `dist/claude-ai/PROJECT-INSTRUCTIONS.md`：プロジェクトの指示に足す文。日本語の文書（アーティファクト・ファイル・文書として渡す長めの返答）を書いたら、渡す前に毎回 ja-proofread スキルで校正し、誤検知と判断したもの以外の「必ず」を直し、件数を1行で書く。スキルが見つからない、コード実行が使えないときは、校正できなかったと伝える。仕上げは頼まれたときだけ、同じ会話の中で行う。Notion への登録は頼まれたときだけ。
+- `scripts/build-claude-ai-skill.mjs`：上の2つを作る。中身はパスの順、日時は 2026-01-01 00:00 に固定し、同じ中身なら同じ sha256 になる。入れるファイルは git が追跡しているものだけ。`--check` で dist が最新か、CHANGELOG の今の版の項に zip の sha256 があるかを確かめる（CI でも確かめる）。同梱・kit・一式には入れない。
+- チャット向けの手順：サブエージェントを使えないので、独立レビューと読者役は同じ会話の中で役を変えて行い、「別の会話に貼って読ませると独立性が上がる」と本人に伝える。Node や npm が無いとき、ネットワークに出られないときは、できる点検だけを行い、textlint が動かなかったと伝える。台帳を育てる「配る」は、新しい zip を上げ直す手順にした。
+- `lib.mjs`：既定の記録の置き場（`~/.cache/ja-proofread`）に書けないときは、一時ディレクトリの下の `ja-proofread-cache` を使う。
+- 文書：`docs/install-claude-ai.md` を足した（コード実行の設定、zip の取り方と上げ方、プロジェクトの指示への足し方、試す文、新しい版にする・やめる、できないこと）。README の入れ方を表にして claude.ai のチャットのプロジェクトの行を足し、install-cloud.md と install-projects.md からも案内した。grow-ledger の反映の手順に、`build-claude-ai-skill.mjs` で作り直すことを足した。
+
 ## 0.1.13（2026-11-26）
 - 同梱の一式 `dist/ja-proofread-setup.mjs` の sha256：`56baaaa5f8d3968b1e1b7a5a5883375e9bc4464eed9fc77a6a6afafd901f0234`
 - 0.1.12 の確認での指摘を直した。台帳の型は変えていない（台帳の版は plugin.json とそろえて 0.1.13 にした）。

@@ -12,6 +12,8 @@ curl -fsSLo /tmp/ja-proofread-setup.mjs https://raw.githubusercontent.com/andy09
 
 claude.ai/code の Projects で使うなら、リポジトリがあってもなくても、[install-projects.md](install-projects.md) の kit（`/mnt/project-files` に一式を書き、プロジェクト指示で毎回の校正を頼む）が主な手順です。
 
+この文書の「claude.ai の Projects」は、claude.ai/code の Projects（Claude Code の Projects）のことです。claude.ai のチャットのプロジェクト（claude.ai の Projects。プロジェクトの指示・ファイル・スキルを入れて使うもの）では、Claude Code もプラグインも動かないので、スキルの zip を上げて使います。[install-claude-ai.md](install-claude-ai.md) を見てください。
+
 ## 先に、どこで動くか
 
 | 使う場所 | このプラグインの使い方 | 確かめた程度 |

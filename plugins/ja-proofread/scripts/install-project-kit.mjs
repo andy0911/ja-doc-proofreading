@@ -45,7 +45,7 @@ const TOP = new Set(["PROJECT-INSTRUCTIONS.md", "kit.json", "kit.sha256", "scrip
 // 照らし合わせ（kit.sha256）に入れないもの。kit.sha256 の値は PROJECT-INSTRUCTIONS.md に書き、kit.json にはそれ以外の全部の値を書くため
 const NOT_IN_SUMS = new Set(["kit.json", "kit.sha256", "PROJECT-INSTRUCTIONS.md"]);
 // kit では使わないスクリプト（同梱・kit・dist を作るもの、フック）
-const SKIP_SCRIPTS = new Set(["build-setup.mjs", "install-into-project.mjs", "install-project-kit.mjs", "hook-post-edit.mjs"]);
+const SKIP_SCRIPTS = new Set(["build-setup.mjs", "build-claude-ai-skill.mjs", "install-into-project.mjs", "install-project-kit.mjs", "hook-post-edit.mjs"]);
 // 入れ替えの途中のものを書く一時ディレクトリ（kit の中。同じファイルシステムで名前を変えて入れ替えるため）
 const STAGE_PREFIX = ".ja-proofread-kit-new-";
 const RAW = "https://raw.githubusercontent.com/andy0911/ja-doc-proofreading/main/dist/ja-proofread-setup.mjs";

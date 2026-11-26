@@ -1,5 +1,5 @@
 // 共通処理：設定の読み込み、依存の場所、textlint の実行、構成チェックの集約
-import { readFileSync, existsSync, mkdirSync, writeFileSync, appendFileSync, realpathSync, rmSync, mkdtempSync, readdirSync, renameSync } from "node:fs";
+import { readFileSync, existsSync, mkdirSync, writeFileSync, appendFileSync, realpathSync, rmSync, mkdtempSync, readdirSync, renameSync, accessSync, constants as fsConstants } from "node:fs";
 import { dirname, join, resolve, relative, isAbsolute } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -20,7 +20,15 @@ export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 // kit として動くときは、記録の置き場を kit の隣の ja-proofread-data に決め（kit.json の data の値は案内で、使わない）、
 // 根の中の node_modules を使わず、正規表現の検査の記録は共有の置き場でなくスレッドの中（既定の場所）に置く。
 // 記録はスレッドをまたいで残したいので /mnt/project-files の下に置き、依存（node_modules）は既定の場所（~/.cache）に入れる
-const defaultCache = () => join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "ja-proofread");
+// 既定の場所は ~/.cache/ja-proofread（XDG_CACHE_HOME があればその下）。書けないとき（claude.ai のチャットのサンドボックスなど）は、
+// 一時ディレクトリの下の ja-proofread-cache にする。スクリプトの根（スキルのフォルダ）には書かない
+function writableDir(d) {
+  try { mkdirSync(d, { recursive: true }); accessSync(d, fsConstants.W_OK); return true; } catch { return false; }
+}
+const defaultCache = () => {
+  const d = join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "ja-proofread");
+  return writableDir(d) ? d : join(tmpdir(), "ja-proofread-cache");
+};
 const envData = () => process.env.JA_PROOFREAD_DATA || process.env.CLAUDE_PLUGIN_DATA || "";
 export const KIT_DATA_REL = "../ja-proofread-data";
 export function isKitRoot() {

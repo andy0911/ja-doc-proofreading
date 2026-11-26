@@ -2,6 +2,8 @@
 
 claude.ai/code の Projects（会話と、そこから始まるスレッドがあるもの）で ja-proofread を使う手順です。プロジェクトにリポジトリがなくても使えます。
 
+claude.ai のチャットのプロジェクト（claude.ai の Projects。プロジェクトの指示・ファイル・スキルを入れて、チャットで使うもの）は別のもので、この手順は使えません。そちらは [install-claude-ai.md](install-claude-ai.md) です。
+
 Projects のクラウドのスレッドは、プロジェクト指示、プロジェクトのメモリー、`/mnt/project-files` にあるファイル（Context タブで足したもの、スレッドが作ったもの）、プロジェクトに足したリポジトリを持って始まります。リポジトリの `.claude/settings.json` のフックは動きません（[What threads pick up from your repositories](https://code.claude.com/docs/en/claude-projects#what-threads-pick-up-from-your-repositories)）。そこでこの手順では、校正の一式と手順の本文（kit）を `/mnt/project-files` に置き、書いたら校正するよう、プロジェクト指示でスレッドに頼みます。
 
 claude.ai/customize/plugins でアカウントにプラグインを足す方法は、公式の説明ではクラウドのスレッドにも読み込まれるとされていますが、持ち主の環境ではその画面でこのマーケットプレイスの追加ができなかったので、この手順では使いません。

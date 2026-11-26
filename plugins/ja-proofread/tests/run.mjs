@@ -928,7 +928,7 @@ ok("同梱したスキルに、プラグインのデータ置き場の説明が�
   ok("フックのコマンドは $CLAUDE_PROJECT_DIR/.claude/ja-proofread/scripts/ を指す", cmds.length === 2 && cmds.every((c) => c.includes('"$CLAUDE_PROJECT_DIR/.claude/ja-proofread/scripts/')), cmds.join(" | "));
   const addLine = r.stdout.split("\n").find((l) => l.includes("git add ")) || "";
   ok("最後に、同梱したものの名前だけのコミットするパスと git add … && git commit … && git push -u origin HEAD の例を出す", /コミットするパス：\.claude\/ja-proofread \.claude\/skills\/ja-proofread-grow-ledger /.test(r.stdout) && /git add \.claude\/ja-proofread .*\.ja-proofread\.json && git commit -m "ja-proofread を同梱" && git push -u origin HEAD$/.test(addLine) && !addLine.includes("ja-proofread-*") && (r.stdout.match(/コミットするパス：/g) || []).length === 1 && /新しいセッションを始めて/.test(r.stdout), r.stdout);
-  ok("同梱に build-setup.mjs と install-project-kit.mjs は入らない（一式で同梱しても install-into-project で同梱しても）。一式は build-setup.mjs を持たない", ["build-setup.mjs", "install-project-kit.mjs"].every((f) => !existsSync(join(viaSetup, ".claude/ja-proofread/scripts", f)) && !existsSync(join(viaInstall, ".claude/ja-proofread/scripts", f))) && existsSync(join(viaSetup, ".claude/ja-proofread/scripts/install-into-project.mjs")) && !run([DIST, "--list"]).stdout.includes("build-setup.mjs"));
+  ok("同梱に build-setup.mjs・build-claude-ai-skill.mjs・install-project-kit.mjs は入らない（一式で同梱しても install-into-project で同梱しても）。一式は build-setup.mjs と build-claude-ai-skill.mjs を持たない", ["build-setup.mjs", "build-claude-ai-skill.mjs", "install-project-kit.mjs"].every((f) => !existsSync(join(viaSetup, ".claude/ja-proofread/scripts", f)) && !existsSync(join(viaInstall, ".claude/ja-proofread/scripts", f))) && existsSync(join(viaSetup, ".claude/ja-proofread/scripts/install-into-project.mjs")) && !/build-setup\.mjs|build-claude-ai-skill\.mjs/.test(run([DIST, "--list"]).stdout));
   write(viaSetup, "doc.md", readFileSync(join(ROOT, "tests/fixtures/ai-like.md"), "utf8"));
   const hr = run([join(viaSetup, ".claude/ja-proofread/scripts/hook-post-edit.mjs")], { input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: join(viaSetup, "doc.md") }, cwd: viaSetup }), env: { CLAUDE_PROJECT_DIR: viaSetup } });
   ok("一式で同梱したフックが動き、必ず直す指摘を返す", /"decision":"block"/.test(hr.stdout) && /必ず直す [1-9]/.test(hr.stdout), hr.stdout.slice(0, 200) + hr.stderr);
@@ -1009,7 +1009,7 @@ ok("同梱したスキルに、プラグインのデータ置き場の説明が�
   r = run([DIST, "--project-kit", kit], { env: { GIT_CEILING_DIRECTORIES: pf } });
   const allFiles = (d) => { const out = []; const walk = (x) => { for (const n of readdirSync(x)) { const p = join(x, n); out.push(p); if (statSync(p).isDirectory()) walk(p); } }; walk(d); return out; };
   ok("--project-kit は git の作業コピーでなくても kit を書く", r.status === 0 && existsSync(join(kit, "kit.json")) && existsSync(join(kit, "kit.sha256")) && existsSync(join(kit, "PROJECT-INSTRUCTIONS.md")) && existsSync(join(kit, "scripts/proofread.mjs")) && existsSync(join(kit, "rules/ledger-patterns.js")) && existsSync(join(kit, "agents/structure-reviewer.md")) && existsSync(join(kit, "skills/proofread/SKILL.md")), r.stdout.slice(0, 300) + r.stderr);
-  ok("kit に隠しファイル（入れ替えの一時ディレクトリを含む）と、kit では使わないスクリプト（同梱・kit・dist・フック）を書かない", safe(() => !allFiles(kit).some((p) => basename(p).startsWith(".")) && ["build-setup.mjs", "install-into-project.mjs", "install-project-kit.mjs", "hook-post-edit.mjs"].every((f) => !existsSync(join(kit, "scripts", f)))));
+  ok("kit に隠しファイル（入れ替えの一時ディレクトリを含む）と、kit では使わないスクリプト（同梱・kit・dist・フック）を書かない", safe(() => !allFiles(kit).some((p) => basename(p).startsWith(".")) && ["build-setup.mjs", "build-claude-ai-skill.mjs", "install-into-project.mjs", "install-project-kit.mjs", "hook-post-edit.mjs"].every((f) => !existsSync(join(kit, "scripts", f)))));
   const kj = json(readFileSync(join(kit, "kit.json"), "utf8"));
   const kfiles = Object.keys(kj.files || {});
   ok("kit.json に版と記録の置き場と、書いたファイルの一覧（sha256 つき）がある", kj.name === "ja-proofread-kit" && kj.version === json(readFileSync(join(ROOT, ".claude-plugin/plugin.json"), "utf8")).version && resolve(kit, kj.data) === kdata && kfiles.includes("scripts/proofread.mjs") && kfiles.includes("kit.sha256") && kfiles.includes("PROJECT-INSTRUCTIONS.md") && !kfiles.includes("kit.json") && kfiles.every((f) => /^[0-9a-f]{64}$/.test(kj.files[f])), JSON.stringify(kj).slice(0, 300));
@@ -1126,6 +1126,94 @@ ok("同梱したスキルに、プラグインのデータ置き場の説明が�
   ok("--as を付けると、手元で作った kit の手順と指示のパスを使う場所で書き、名前が違えば注意を出す（アップロード向け）", r.status === 0 && asText.includes('node "/mnt/project-files/ja-proofread-kit/scripts/proofread.mjs"') && asText.includes("/mnt/project-files/ja-proofread-data") && !asText.includes(asKit) && /名前（kit）と --as の名前（ja-proofread-kit）が違います/.test(r.stderr), r.stderr);
   r = run([DIST, "--project-kit", join(pf, "none-kit"), "--remove"]);
   ok("kit が無いときの --remove は何も変えずに終える", r.status === 0 && /kit はありません/.test(r.stdout) && !existsSync(join(pf, "none-kit")), r.stdout + r.stderr);
+}
+
+// 22. claude.ai のチャットに上げるスキル（dist/claude-ai/ja-proofread-skill.zip と PROJECT-INSTRUCTIONS.md）
+{
+  const CAI = resolve(ROOT, "..", "..", "dist", "claude-ai");
+  const ZIP = join(CAI, "ja-proofread-skill.zip");
+  r = run([S("build-claude-ai-skill.mjs"), "--check"]);
+  ok("dist/claude-ai/ の zip と PROJECT-INSTRUCTIONS.md は作り直したものと同じで、CHANGELOG の今の版の項に zip の sha256 がある", r.status === 0, r.stdout + r.stderr);
+  const o1 = tmp("jp-caiout1-"), o2 = tmp("jp-caiout2-");
+  const r1 = run([S("build-claude-ai-skill.mjs"), "--out", o1]), r2 = run([S("build-claude-ai-skill.mjs"), "--out", o2]);
+  ok("2回作っても、zip と PROJECT-INSTRUCTIONS.md はバイト単位で同じ（dist のものとも同じ）", r1.status === 0 && r2.status === 0 && safe(() => readFileSync(join(o1, "ja-proofread-skill.zip")).equals(readFileSync(join(o2, "ja-proofread-skill.zip"))) && readFileSync(join(o1, "ja-proofread-skill.zip")).equals(readFileSync(ZIP)) && readFileSync(join(o1, "PROJECT-INSTRUCTIONS.md")).equals(readFileSync(join(CAI, "PROJECT-INSTRUCTIONS.md")))), r1.stderr + r2.stderr);
+  // zip を読む（中央ディレクトリから。中身は inflate して CRC を確かめる）
+  const { inflateRawSync, crc32: zcrc } = await import("node:zlib");
+  const readZip = (buf) => {
+    const eocd = buf.lastIndexOf(Buffer.from([0x50, 0x4b, 0x05, 0x06]));
+    const n = buf.readUInt16LE(eocd + 10);
+    let off = buf.readUInt32LE(eocd + 16);
+    const out = [];
+    for (let i = 0; i < n; i++) {
+      const method = buf.readUInt16LE(off + 10), crc = buf.readUInt32LE(off + 16), csize = buf.readUInt32LE(off + 20), usize = buf.readUInt32LE(off + 24);
+      const nl = buf.readUInt16LE(off + 28), el = buf.readUInt16LE(off + 30), cl = buf.readUInt16LE(off + 32), lho = buf.readUInt32LE(off + 42);
+      const ext = buf.readUInt32LE(off + 38) >>> 16;
+      const name = buf.toString("utf8", off + 46, off + 46 + nl);
+      const lnl = buf.readUInt16LE(lho + 26), lel = buf.readUInt16LE(lho + 28);
+      const raw = buf.subarray(lho + 30 + lnl + lel, lho + 30 + lnl + lel + csize);
+      const data = method === 8 ? inflateRawSync(raw) : Buffer.from(raw);
+      out.push({ name, data, ok: data.length === usize && (!zcrc || (zcrc(data) >>> 0) === crc), ext });
+      off += 46 + nl + el + cl;
+    }
+    return out;
+  };
+  const ents = safe(() => readZip(readFileSync(ZIP))) || [];
+  const fileEnts = ents.filter((e) => !e.name.endsWith("/"));
+  const names = fileEnts.map((e) => e.name);
+  const text = (n) => fileEnts.find((e) => e.name === n)?.data.toString("utf8") || "";
+  const skill = text("ja-proofread/SKILL.md");
+  const fm = /^---\nname: ([^\n]*)\ndescription: ([^\n]*)\n---\n/.exec(skill);
+  ok("zip の最上位は ja-proofread/ だけで、SKILL.md の name はフォルダの名前と同じ（小文字・数字・ハイフン、64字まで）、description は1,024字まで", ents.length > 0 && ents.every((e) => e.name.startsWith("ja-proofread/") && e.ok) && !!fm && fm[1] === "ja-proofread" && /^[a-z0-9-]{1,64}$/.test(fm[1]) && [...fm[2]].length <= 1024 && /日本語の文書/.test(fm[2]) && /校正/.test(fm[2]), ents.filter((e) => !e.ok || !e.name.startsWith("ja-proofread/")).map((e) => e.name).join(",") + (fm ? "" : " frontmatter?"));
+  const must = ["SKILL.md", "skill.json", "package.json", "package-lock.json", "scripts/proofread.mjs", "scripts/ensure-deps.mjs", "scripts/lib.mjs", "rules/ledger-patterns.js", "data/ledger.json", "data/prh.yml", "config/doc.textlintrc.json", "templates/reader-test.md", "references/write.md", "references/proofread.md", "references/grow-ledger.md", "references/agents/structure-reviewer.md", "references/agents/fresh-eyes-reader.md"];
+  const missing = must.filter((f) => !names.includes("ja-proofread/" + f));
+  const banned = names.filter((n) => n.split("/").some((x) => x.startsWith(".") || x === "node_modules") || /scripts\/(build-setup|build-claude-ai-skill|install-into-project|install-project-kit|hook-post-edit)\.mjs$/.test(n) || /^ja-proofread\/(skills|agents|hooks|tests)\//.test(n));
+  ok("zip に校正の一式と references/ が入り、隠しファイル・node_modules・同梱や kit やフックのスクリプトは入らない", missing.length === 0 && banned.length === 0, "足りない：" + missing.join(",") + " 余計：" + banned.join(","));
+  const allText = fileEnts.filter((e) => e.name === "ja-proofread/SKILL.md" || /^ja-proofread\/references\/.*\.md$/.test(e.name)).map((e) => e.data.toString("utf8")).join("\n");
+  const refPaths = [...new Set([...allText.matchAll(/\$\{CLAUDE_SKILL_DIR\}\/([^\s"`）)、。]+)/g)].map((m) => m[1].replace(/\/$/, "")))];
+  const badRefs = refPaths.filter((p) => !names.includes("ja-proofread/" + p) && !names.some((n) => n.startsWith("ja-proofread/" + p + "/")));
+  ok("スキルの本文（SKILL.md と references/）に、プラグイン用の変数・プラグインだけの案内・Notion への自動の登録・サブエージェントの接頭辞つきの名前が残らず、${CLAUDE_SKILL_DIR} の指すファイルが zip にある", !allText.includes("${CLAUDE_PLUGIN") && !allText.includes("plugin-only") && !/JA_PROOFREAD_DATA=/.test(allText) && !/autoRegisterCandidates/.test(allText) && !/ja-proofread:(structure-reviewer|fresh-eyes-reader)/.test(allText) && refPaths.length >= 8 && badRefs.length === 0, "指す先がない：" + badRefs.join(","));
+  const refsAll = ["write", "proofread", "grow-ledger"].map((n) => text(`ja-proofread/references/${n}.md`)).join("\n");
+  ok("SKILL.md と references/ に、チャットでの読み替え（同じ会話で役を変える、別の会話に貼ると独立性が上がる、仕上げは頼まれたときだけ、Notion は頼まれたときだけ、Node が無いときの点検）がある", /別の会話に貼って読ませると、?独立性が上がる/.test(skill) && /別の会話に貼って読ませると、?独立性が上がる/.test(refsAll) && /頼まれたときだけ/.test(skill) && /本人が頼んだときだけ/.test(skill) && /node -v/.test(skill) && /ledger\.json/.test(skill) && /textlint もスクリプトも動かなかった/.test(skill) && /本人に頼まれたときだけ/.test(text("ja-proofread/references/write.md")) && /上げ直します/.test(text("ja-proofread/references/grow-ledger.md")));
+  // PROJECT-INSTRUCTIONS.md
+  const piText = readFileSync(join(CAI, "PROJECT-INSTRUCTIONS.md"), "utf8");
+  const paste = (piText.split("----- 貼る部分ここから（この行は貼らない） -----\n")[1] || "").split("\n----- 貼る部分ここまで（この行は貼らない） -----")[0];
+  ok("PROJECT-INSTRUCTIONS.md の貼る部分は1,500字まで、ja-proofread スキルで毎回校正すること、見つからなければ校正できなかったと伝えることを書き、終わりの行で終わる", paste.length > 0 && [...paste].length <= 1500 && /ja-proofread スキルで毎回校正/.test(paste) && /校正できなかったと伝え/.test(paste) && paste.endsWith("（ja-proofread の指示はここまで）"), [...paste].length);
+  // 展開して読み取り専用にしたフォルダから、空の HOME で ensure-deps と proofread が動き、スキルのフォルダには何も書かない
+  const ex = tmp("jp-caiex-");
+  for (const e of ents) { const p = join(ex, e.name); if (e.name.endsWith("/")) mkdirSync(p, { recursive: true }); else { mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, e.data); } }
+  const sdir = join(ex, "ja-proofread");
+  const listing = (d) => { const out = []; const walk = (x) => { for (const n of readdirSync(x).sort()) { const p = join(x, n); const st = lstatSync(p); out.push(relative(d, p) + "\0" + st.size + "\0" + st.mtimeMs); if (st.isDirectory()) walk(p); } }; walk(d); return out.join("\n"); };
+  spawnSync("chmod", ["-R", "a-w", sdir]);
+  const before3 = listing(sdir);
+  const chome = tmp("jp-caihome-");
+  mkdirSync(join(chome, ".cache/ja-proofread"), { recursive: true });
+  if (existsSync(join(OUTER_DATA, "deps"))) symlinkSync(join(OUTER_DATA, "deps"), join(chome, ".cache/ja-proofread/deps"));
+  const cenv = { ...BASE_ENV, HOME: chome };
+  delete cenv.JA_PROOFREAD_DATA; delete cenv.XDG_CACHE_HOME;
+  const cdoc = write(tmp("jp-caidoc-"), "doc.md", readFileSync(join(ROOT, "tests/fixtures/ai-like.md"), "utf8"));
+  const cr1 = spawnSync(process.execPath, [join(sdir, "scripts/ensure-deps.mjs")], { encoding: "utf8", cwd: WORK, env: cenv });
+  const cr2 = spawnSync(process.execPath, [join(sdir, "scripts/proofread.mjs"), cdoc], { encoding: "utf8", cwd: WORK, env: cenv });
+  ok("展開して読み取り専用にしたスキルのフォルダから、空の HOME で ensure-deps と proofread が動き、必ず直す指摘を返し、記録は ~/.cache/ja-proofread に残し、スキルのフォルダは変わらない", cr1.status === 0 && /必ず直す [1-9]/.test(cr2.stdout) && !/textlint が動かなかった/.test(cr2.stdout) && existsSync(join(chome, ".cache/ja-proofread/hits.jsonl")) && listing(sdir) === before3, cr1.stderr + cr2.stdout.slice(0, 200) + cr2.stderr);
+  // HOME の下に書けないときは、一時ディレクトリの下の ja-proofread-cache を使う
+  const fhome = write(tmp("jp-caifilehome-"), "not-a-dir", "x");
+  const ftmp = tmp("jp-caitmp-");
+  const fenv = { ...cenv, HOME: fhome, TMPDIR: ftmp, JA_PROOFREAD_SKIP_INSTALL: "1" };
+  const cr3 = spawnSync(process.execPath, [join(sdir, "scripts/proofread.mjs"), cdoc], { encoding: "utf8", cwd: WORK, env: fenv });
+  ok("HOME の下に書けなければ、記録を一時ディレクトリの下の ja-proofread-cache に置いて動く", cr3.status === 0 && /必ず/.test(cr3.stdout) && existsSync(join(ftmp, "ja-proofread-cache/hits.jsonl")) && listing(sdir) === before3, cr3.stdout.slice(0, 200) + cr3.stderr.slice(0, 300));
+  spawnSync("chmod", ["-R", "u+w", ex]);
+  // git が追跡していないファイルは入れない。git の外では止める
+  const cRepo = tmp("jp-caibuild-");
+  cpSync(ROOT, join(cRepo, "plugins/ja-proofread"), { recursive: true, filter: (p) => !p.includes("node_modules") });
+  spawnSync("git", ["init", "-q"], { cwd: cRepo });
+  spawnSync("git", ["add", "-A"], { cwd: cRepo });
+  write(cRepo, "plugins/ja-proofread/templates/untracked-memo.md", "追跡していないメモ\n");
+  r = run([join(cRepo, "plugins/ja-proofread/scripts/build-claude-ai-skill.mjs"), "--out", join(cRepo, "out")]);
+  const cNames = safe(() => readZip(readFileSync(join(cRepo, "out/ja-proofread-skill.zip"))).map((e) => e.name)) || [];
+  ok("build-claude-ai-skill.mjs は git が追跡していないファイルを入れない", r.status === 0 && cNames.includes("ja-proofread/scripts/proofread.mjs") && !cNames.some((n) => n.includes("untracked")), r.stderr);
+  const cNo = tmp("jp-caibuildnogit-");
+  cpSync(ROOT, join(cNo, "plugins/ja-proofread"), { recursive: true, filter: (p) => !p.includes("node_modules") });
+  r = run([join(cNo, "plugins/ja-proofread/scripts/build-claude-ai-skill.mjs"), "--out", join(cNo, "out")], { env: { GIT_CEILING_DIRECTORIES: cNo } });
+  ok("build-claude-ai-skill.mjs は git の外では止め、何も書かない", r.status === 1 && /git ls-files/.test(r.stderr) && !existsSync(join(cNo, "out")), r.stderr);
 }
 
 // 12. 一時ディレクトリを残さない（このテストが作ったものは、ここで消す）

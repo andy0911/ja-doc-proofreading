@@ -110,10 +110,11 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/stylometry.mjs" compare --baseline 基準.js
 node plugins/ja-proofread/scripts/ledger.mjs apply approved.json
 ```
 
-   続けて、1ファイルで入る同梱の一式（`dist/ja-proofread-setup.mjs`）を新しい版で作り直し、確かめます。作り直すと、`CHANGELOG.md` の新しい版の項に、そのファイルの sha256 の行が足されます。作り直し忘れは CI とテストで落ちます。
+   続けて、1ファイルで入る同梱の一式（`dist/ja-proofread-setup.mjs`）と、claude.ai のチャットに上げるスキル（`dist/claude-ai/`）を新しい版で作り直し、確かめます。作り直すと、`CHANGELOG.md` の新しい版の項に、それぞれの sha256 の行が足されます。作り直し忘れは CI とテストで落ちます。
 
 ```bash
 node plugins/ja-proofread/scripts/build-setup.mjs
+node plugins/ja-proofread/scripts/build-claude-ai-skill.mjs
 node plugins/ja-proofread/scripts/ledger.mjs validate
 npm test --prefix plugins/ja-proofread
 ```
