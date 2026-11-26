@@ -15,10 +15,16 @@ let raw = "";
 process.stdin.setEncoding("utf8");
 process.stdin.on("data", (c) => (raw += c));
 process.stdin.on("end", () => {
-  try { main(JSON.parse(raw || "{}")); } catch (e) { process.stderr.write(`ja-proofread hook: ${e.message}\n`); process.exit(0); }
+  try { main(JSON.parse(raw || "{}")); }
+  catch (e) {
+    // 思わぬ失敗でも、黙って止まらず、校正しなかったことを Claude に知らせる
+    process.stderr.write(`ja-proofread hook: ${e.message}\n`);
+    context(`ja-proofread: 書いた直後の校正が途中で止まったため、このファイルは校正していません（${String(e.message).split("\n")[0].slice(0, 300)}）。校正するときは proofread スキルを使ってください。`);
+    process.exit(0);
+  }
 });
 
-const context = (text) => process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: text } }));
+function context(text) { process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: text } })); }
 
 function main(input) {
   const file = input?.tool_input?.file_path || input?.tool_input?.path;
@@ -66,8 +72,7 @@ const sig = (x) => `${x.ruleId}|${String(x.message).replace(/[0-9０-９]+/g, "#
 
 function newFindings(abs, findings, { lintFailed = false } = {}) {
   const path = join(dataDir(), "hook-last.json");
-  let state = {};
-  try { state = JSON.parse(readFileSync(path, "utf8")); } catch { state = {}; }
+  const state = loadState(path);
   const key = fileKey(abs);
   const last = state[key] || {};
   const prev = new Map();
@@ -91,4 +96,18 @@ function newFindings(abs, findings, { lintFailed = false } = {}) {
   for (const k of keys.slice(500)) delete state[k];
   try { writeFileSync(path, JSON.stringify(state)); } catch { /* 保存できなくても校正の結果は返す */ }
   return fresh;
+}
+
+// 前回の結果を読む。壊れていたら（null、配列、項目が null や形の違うものなど）その分を捨てて作り直す
+function loadState(path) {
+  let raw;
+  try { raw = JSON.parse(readFileSync(path, "utf8")); } catch { return {}; }
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {};
+  const strings = (v) => Array.isArray(v) && v.every((x) => typeof x === "string");
+  const state = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (!v || typeof v !== "object" || Array.isArray(v) || !strings(v.sigs)) continue;
+    state[k] = { at: Number.isFinite(v.at) ? v.at : 0, sigs: v.sigs, ...(strings(v.lint) ? { lint: v.lint } : {}) };
+  }
+  return state;
 }

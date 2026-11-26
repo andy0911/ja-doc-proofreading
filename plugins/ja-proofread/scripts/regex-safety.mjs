@@ -1,19 +1,24 @@
 // 台帳と辞書の正規表現が、校正のたびに重くならないかを確かめる。依存なし（Node 標準のみ）
 //
 //   入れ子の量指定子（(あ+)+い など）は形で拒否する
-//   繰り返すグループの中の選択（(?:漢|漢字?)+ など）も形で拒否する。選択肢が重なると、長い文で止まるため
-//   長い繰り返し文字列（かな・カタカナ・漢字・全角英数字・記号・空白×40 など）で時間を測り、遅いものを拒否する
+//   繰り返すグループの中の選択（(?:漢|漢字?)+ など）も形で拒否する。選択肢が重なると、長い文で止まるため。
+//     ただし、選択肢がどれも「1文字か文字クラス1つ」で、選択肢どうしが同じ文字に当たらないもの（(?:、|,)+ など）は通す
+//   長い繰り返し文字列（かな・カタカナ・漢字・全角英数字・記号・ASCII の記号・空白と改行の混ざった数万文字・
+//     正規表現に出てくる文字×2000 など）で時間を測り、遅いものを拒否する
 //   長さ0で一致し得るもの（空文字、? や * だけ、先読み・後読みだけ、など）を拒否する
+//   flags は i m s u（と g）だけ。同じ文字を2回書いたもの（gg など）は拒否する
 //
-// 時間を測る部分は、止まらない正規表現でも打ち切れるよう別プロセスで動かす（node regex-safety.mjs --probe）
+// 時間を測る部分は、止まらない正規表現でも打ち切れるよう別プロセスで動かす。
+// 何件あっても子プロセスは1つで、その中の worker_threads で1件ずつ測り、1件ごとに打ち切る（node regex-safety.mjs --probe-batch）
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
-import { readFileSync } from "node:fs";
+import { readFileSync, writeSync, realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
+import { Worker, isMainThread, parentPort, workerData } from "node:worker_threads";
 
 const SELF = fileURLToPath(import.meta.url);
 export const MAX_MS = 200;
-const KILL_MS = 3000;
+export const KILL_MS = 1000;
 
 // 量指定子を読む。返すのは { len, max }（max は繰り返しの上限。上限なしは Infinity）。
 // 回数が決まっている {n} は、文字の取り方が1通りなので繰り返しとして扱わない（max を 1 にする）
@@ -94,9 +99,62 @@ export function minLength(src) {
   return alt();
 }
 
+// 1つの選択肢が「1文字か文字クラス1つ」か（\s \d \p{…} 　 . [^…] などを含む）
+const SINGLE_ATOM = /^(?:\\u\{[0-9a-fA-F]+\}|\\u[0-9a-fA-F]{4}|\\x[0-9a-fA-F]{2}|\\c[A-Za-z]|\\[pP]\{[^}]+\}|\\[^1-9bBkc]|\[(?:\\[\s\S]|[^\]\\])*\]|\.|[^\\[\](){}|*+?^$.])$/su;
+
+// グループの中身を、いちばん外の | で分ける
+function topAlternatives(content) {
+  const parts = [];
+  let depth = 0, cur = "";
+  for (let i = 0; i < content.length; i++) {
+    const c = content[i];
+    if (c === "\\") { cur += c + (content[i + 1] ?? ""); i++; continue; }
+    if (c === "[") {
+      let j = i + 1;
+      for (; j < content.length && content[j] !== "]"; j++) if (content[j] === "\\") j++;
+      cur += content.slice(i, j + 1);
+      i = j;
+      continue;
+    }
+    if (c === "(") depth++;
+    if (c === ")") depth--;
+    if (c === "|" && depth === 0) { parts.push(cur); cur = ""; continue; }
+    cur += c;
+  }
+  parts.push(cur);
+  return parts;
+}
+
+// 選択肢がどれも1文字か文字クラス1つで、どの2つも同じ文字に当たらないか。
+// 当たる文字は、すべての文字（u なしは UTF-16 の0〜FFFF、u ありは0〜10FFFF）を実際に当てて確かめる
+const disjointMemo = new Map();
+export function simpleDisjointAlternation(content, flags = "") {
+  const f = [...new Set(String(flags).replace(/[^isu]/g, ""))].join("");
+  const key = f + "\0" + content;
+  if (disjointMemo.has(key)) return disjointMemo.get(key);
+  let ok = false;
+  const parts = topAlternatives(content);
+  if (parts.length >= 2 && parts.every((p) => SINGLE_ATOM.test(p))) {
+    try {
+      const res = parts.map((p) => new RegExp(`^(?:${p})$`, f));
+      const u = f.includes("u");
+      const max = u ? 0x10ffff : 0xffff;
+      ok = true;
+      for (let cp = 0; cp <= max && ok; cp++) {
+        const s = u ? String.fromCodePoint(cp) : String.fromCharCode(cp);
+        let n = 0;
+        for (const re of res) if (re.test(s) && ++n > 1) { ok = false; break; }
+      }
+    } catch { ok = false; }
+  }
+  disjointMemo.set(key, ok);
+  return ok;
+}
+
 // 形の問題を探す。入れ子の繰り返し、繰り返すグループの中の選択。問題がなければ null
-export function shapeProblem(src) {
-  const stack = [{ rep: false, alt: false }];
+// own：そのグループ自身の | 、deep：中のグループから伝わった | （重ならない1文字の選択は文字クラスと同じに扱い、伝えない）
+export function shapeProblem(src, flags = "") {
+  const stack = [{ rep: false, own: false, deep: false, start: 0 }];
   for (let i = 0; i < src.length; i++) {
     const c = src[i];
     if (c === "\\") { i++; continue; }
@@ -106,22 +164,26 @@ export function shapeProblem(src) {
       if (q) { if (q.max > 1) stack[stack.length - 1].rep = true; i += q.len; }
       continue;
     }
-    if (c === "|") { stack[stack.length - 1].alt = true; continue; }
+    if (c === "|") { stack[stack.length - 1].own = true; continue; }
     if (c === "(") {
-      stack.push({ rep: false, alt: false });
+      let start = i + 1;
       if (src[i + 1] === "?") {
         const m = /^\?(?::|=|!|<=|<!|<[A-Za-z_$][\w$]*>)/.exec(src.slice(i + 1));
-        if (m) i += m[0].length;
+        if (m) { i += m[0].length; start = i + 1; }
       }
+      stack.push({ rep: false, own: false, deep: false, start });
       continue;
     }
     if (c === ")") {
-      const g = stack.length > 1 ? stack.pop() : { rep: false, alt: false };
+      const g = stack.length > 1 ? stack.pop() : { rep: false, own: false, deep: false, start: i };
       const q = quantAt(src, i + 1);
-      if (q && q.max > 1 && g.rep) return "nested";
-      if (q && q.max > 1 && g.alt) return "alternation";
-      if (g.rep || (q && q.max > 1)) stack[stack.length - 1].rep = true;
-      if (g.alt) stack[stack.length - 1].alt = true; // 中の選択は外のグループにも残る（(?:(?:a|aa))+ も拒否する）
+      const repeated = !!q && q.max > 1;
+      const simple = g.own && !g.deep && !g.rep && simpleDisjointAlternation(src.slice(g.start, i), flags);
+      const hasAlt = (g.own && !simple) || g.deep;
+      if (repeated && g.rep) return "nested";
+      if (repeated && hasAlt) return "alternation";
+      if (g.rep || repeated) stack[stack.length - 1].rep = true;
+      if (hasAlt) stack[stack.length - 1].deep = true; // 中の選択は外のグループにも残る（(?:(?:a|aa))+ も拒否する）
       if (q) i += q.len;
       continue;
     }
@@ -136,70 +198,212 @@ export function nestedQuantifier(src) {
   return shapeProblem(src) === "nested";
 }
 
-const SAMPLES = (() => {
-  const base = ["あ", "ア", "ー", " ", "\n", "a", "1", "。", "、", "あア", "ア・", "漢", "漢字", "々", "Ａ", "１", "＊", "■", "（", "　", "／"];
+// 時間を測る見本。どの正規表現にも使う固定の見本と、その正規表現に出てくる文字から作る見本
+const BASE = [
+  "あ", "ア", "ー", " ", "\n", "\t", "a", "1", "。", "、", "あア", "ア・", "漢", "漢字", "々", "Ａ", "１", "＊", "■", "（", "　", "／",
+  "-", "=", "|", "#", "*", ".", "_", "/", "+", "~", ":", ";", ",", "!", "?", "(", ")", "[", "]", "{", "}", "<", ">", "@", "$", "%", "&", "^", "\\", "`", "\"", "'", " \n", "-.",
+];
+const FIXED = (() => {
   const out = ["", "あいう\nかきく", "。\n\n"];
-  for (const b of base) { out.push(b.repeat(40)); out.push(b.repeat(40) + "!"); out.push(b.repeat(2000)); }
+  for (const b of BASE) { out.push(b.repeat(40)); out.push(b.repeat(40) + "!"); out.push(b.repeat(2000)); }
+  // 空白と改行の混ざった数万文字（^\s* のように改行をまたいで戻る形は、ここで2乗に遅くなる）
+  out.push("  \n\t \n\n   \n".repeat(4000));
   return out;
 })();
+
+// 正規表現の中のエスケープ1つを、それが表す1文字にする（\p{…} や \b などは null）
+function escapeChar(src, i) {
+  const d = src[i + 1];
+  let m;
+  if ((m = /^\\u\{([0-9a-fA-F]+)\}/.exec(src.slice(i))) && parseInt(m[1], 16) <= 0x10ffff) return { ch: String.fromCodePoint(parseInt(m[1], 16)), end: i + m[0].length };
+  if ((m = /^\\u([0-9a-fA-F]{4})/.exec(src.slice(i)))) return { ch: String.fromCharCode(parseInt(m[1], 16)), end: i + 6 };
+  if ((m = /^\\x([0-9a-fA-F]{2})/.exec(src.slice(i)))) return { ch: String.fromCharCode(parseInt(m[1], 16)), end: i + 4 };
+  if ((d === "p" || d === "P") && src[i + 2] === "{") return { ch: null, end: src.indexOf("}", i) + 1 || i + 2 };
+  const map = { t: "\t", n: "\n", r: "\r", f: "\f", v: "\v", s: " ", S: "a", d: "1", D: "a", w: "a", W: "-", 0: "\0" };
+  if (d === undefined || d === "b" || d === "B" || /[1-9]/.test(d)) return { ch: null, end: i + 2 };
+  return { ch: map[d] ?? d, end: i + 2 };
+}
+
+// 正規表現に出てくる文字（文字そのもの、エスケープ、文字クラスの中の文字と範囲の両端）を、出てきた順に最大40個
+export function regexChars(src) {
+  const out = new Set();
+  const add = (ch) => { if (ch && out.size < 40) out.add(ch); };
+  for (let i = 0; i < src.length && out.size < 40; i++) {
+    const c = src[i];
+    if (c === "\\") { const e = escapeChar(src, i); add(e.ch); i = e.end - 1; continue; }
+    if (c === "[") {
+      let j = i + 1;
+      if (src[j] === "^") j++;
+      for (; j < src.length && src[j] !== "]"; j++) {
+        if (src[j] === "\\") { const e = escapeChar(src, j); add(e.ch); j = e.end - 1; continue; }
+        const cp = src.codePointAt(j);
+        add(String.fromCodePoint(cp));
+        if (cp > 0xffff) j++;
+      }
+      i = j;
+      continue;
+    }
+    if ("()|*+?^$.".includes(c)) continue;
+    const cp = src.codePointAt(i);
+    add(String.fromCodePoint(cp));
+    if (cp > 0xffff) i++;
+  }
+  return [...out];
+}
+
+export function samplesFor(pattern) {
+  const chars = regexChars(pattern).filter((c) => !BASE.includes(c));
+  const out = [...FIXED];
+  for (const c of chars) { out.push(c.repeat(2000)); out.push(c.repeat(40) + "\u0001"); }
+  const all = regexChars(pattern);
+  for (let k = 0; k + 1 < all.length && k < 10; k++) out.push((all[k] + all[k + 1]).repeat(1000));
+  return out;
+}
 
 function probe(pattern, flags) {
   const re = new RegExp(pattern, flags + "g");
   let empty = false;
   const t0 = process.hrtime.bigint();
-  for (const s of SAMPLES) {
+  for (const s of samplesFor(pattern)) {
     for (const m of s.matchAll(re)) { if (m[0].length === 0) { empty = true; break; } }
   }
   const ms = Number(process.hrtime.bigint() - t0) / 1e6;
   return { ms, empty };
 }
 
-// 1つの正規表現を確かめ、問題の説明の配列を返す（問題がなければ空）
-export function checkRegex(pattern, flags = "") {
-  const errors = [];
+// 形と書き方だけを確かめる（速い）。問題の説明の配列を返す（問題がなければ空）
+export function checkShape(pattern, flags = "") {
   if (typeof pattern !== "string" || !pattern) return ["正規表現が空です"];
-  const f = String(flags || "").replace(/g/g, "");
-  if (!/^[imsu]*$/.test(f)) return [`flags に使えるのは i m s u だけです（${flags}）`];
+  const raw = String(flags ?? "");
+  if (!/^[gimsu]*$/.test(raw)) return [`flags に使えるのは i m s u だけです（${flags}）`];
+  if (new Set(raw).size !== raw.length) return [`flags に同じ文字が2回以上あります（${flags}）`];
+  const f = raw.replace("g", "");
   try { new RegExp(pattern, f); } catch (e) { return [`正規表現が不正です（${e.message}）`]; }
-  const shape = shapeProblem(pattern);
+  const shape = shapeProblem(pattern, f);
   if (shape === "nested") return ["繰り返しの中に繰り返しがあります（(あ+)+ のような形）。長い文で止まるおそれがあるため使えません"];
-  if (shape === "alternation") return ["繰り返すグループの中に | があります（(?:漢|漢字?)+ のような形）。選択肢が重なると長い文で止まるおそれがあるため使えません。[漢字] のような文字クラスにするか、繰り返しの外で選んでください"];
+  if (shape === "alternation") return ["繰り返すグループの中に | があります（(?:漢|漢字?)+ のような形）。選択肢が重なると長い文で止まるおそれがあるため使えません。[漢字] のような文字クラスにするか、繰り返しの外で選んでください（選択肢がどれも1文字か文字クラス1つで、互いに同じ文字に当たらないときは使えます）"];
   if (minLength(pattern) === 0) return ["長さ0の文字列に一致し得ます（空文字、? や * だけの形、先読み・後読みだけの形など）"];
-  const r = spawnSync(process.execPath, [SELF, "--probe", pattern, f], { encoding: "utf8", timeout: KILL_MS });
-  if (r.error || r.signal) return [`長い繰り返しの文字列で ${KILL_MS / 1000} 秒以内に終わりませんでした`];
-  let res;
-  try { res = JSON.parse(r.stdout); } catch { return [`時間を測れませんでした（${(r.stderr || "").trim().slice(0, 200)}）`]; }
+  return [];
+}
+
+// 時間を測った結果を、問題の説明の配列にする
+function verdict(res) {
+  if (res.timeout) return [`長い繰り返しの文字列で ${KILL_MS / 1000} 秒以内に終わりませんでした`];
+  if (res.error) return [`時間を測れませんでした（${String(res.error).slice(0, 200)}）`];
+  const errors = [];
   if (res.empty) errors.push("長さ0の文字列に一致します（空文字や先読みだけの形）");
   if (res.ms > MAX_MS) errors.push(`長い繰り返しの文字列で ${res.ms.toFixed(0)}ms かかりました（上限 ${MAX_MS}ms）`);
   return errors;
 }
 
-// prh の辞書（YAML）から、/…/ の形で書いた pattern を拾う。
-// 「- /…/」「pattern: /…/」「patterns: /…/」と、それを "…" や '…' で囲んだ形に対応する（imports 先の辞書は見ない）
-export function prhRegexes(text) {
-  const out = [];
-  text.split("\n").forEach((line, i) => {
-    const m = /^\s*(?:-\s+)?(?:(?:pattern|patterns|regexpMustEmpty)\s*:\s+)?("(?:[^"\\]|\\.)*"|'(?:[^']|'')*'|\/.*\/[a-z]*)\s*(?:#.*)?$/.exec(line);
-    if (!m) return;
-    let v = m[1];
-    if (v.startsWith('"')) { try { v = JSON.parse(v); } catch { return; } }
-    else if (v.startsWith("'")) v = v.slice(1, -1).replace(/''/g, "'");
-    const r = /^\/(.*)\/([a-z]*)$/s.exec(v);
-    if (r && r[1]) out.push({ line: i + 1, source: r[1], flags: r[2] });
-  });
+// 時間だけを測る。items は形の検査を通った { source, flags } の配列。
+// 返すのは items と同じ並びの配列で、各要素は問題の説明の配列、または null（budgetMs のうちに測り終えなかったもの）
+export function measureRegexes(items, { budgetMs } = {}) {
+  const results = new Array(items.length).fill(undefined);
+  const flagsOf = (x) => String(x.flags || "").replace("g", "");
+  let start = 0;
+  const until = budgetMs === undefined ? Infinity : Date.now() + budgetMs;
+  while (start < items.length) {
+    const left = until - Date.now();
+    if (left <= 0) break;
+    const rest = items.slice(start).map((x) => ({ source: x.source, flags: flagsOf(x) }));
+    const killAfter = Number.isFinite(left) ? left + KILL_MS * 2 + 5000 : rest.length * (KILL_MS + 500) + 10000;
+    const r = spawnSync(process.execPath, [SELF, "--probe-batch"], {
+      input: JSON.stringify({ items: rest, budgetMs: Number.isFinite(left) ? left : null }),
+      encoding: "utf8", timeout: killAfter, killSignal: "SIGKILL", maxBuffer: 64 * 1024 * 1024,
+    });
+    let done = null;
+    for (const line of (r.stdout || "").split("\n")) {
+      if (!line.trim()) continue;
+      let o;
+      try { o = JSON.parse(line); } catch { continue; }
+      if (o.done) { done = o; continue; }
+      if (Number.isInteger(o.i) && o.i >= 0 && start + o.i < items.length && results[start + o.i] === undefined) results[start + o.i] = verdict(o);
+    }
+    let first = start;
+    while (first < items.length && results[first] !== undefined) first++;
+    if (first >= items.length) break;
+    if (done && done.budget) break; // 時間切れ。残りは測っていない
+    if (!done || first === start) {
+      // 子プロセスが途中で止まった。測り終えなかった最初の1件は拒否して、その次から続ける
+      results[first] = [`時間を測れませんでした（${(r.error?.message || r.signal || (r.stderr || "").trim().slice(0, 200) || "子プロセスが止まりました")}）`];
+      start = first + 1;
+    } else start = first;
+  }
+  return results.map((x) => (x === undefined ? null : x));
+}
+
+// 正規表現をまとめて確かめる。list は { source, flags } の配列。返すのは同じ並びで、問題の説明の配列か null（時間切れ）
+export function checkRegexes(list, { budgetMs } = {}) {
+  const out = list.map((x) => checkShape(x.source, x.flags));
+  const todo = [];
+  out.forEach((p, k) => { if (!p.length) todo.push(k); });
+  if (todo.length) {
+    const measured = measureRegexes(todo.map((k) => list[k]), { budgetMs });
+    todo.forEach((k, n) => { out[k] = measured[n]; });
+  }
   return out;
 }
 
-// prh の辞書ファイルの正規表現をすべて確かめ、問題の説明の配列を返す
-export function checkPrhText(text, name = "prh") {
-  const errors = [];
-  for (const r of prhRegexes(text)) for (const e of checkRegex(r.source, r.flags)) errors.push(`${name} ${r.line}行 /${r.source}/: ${e}`);
-  return errors;
+// 1つの正規表現を確かめ、問題の説明の配列を返す（問題がなければ空）
+export function checkRegex(pattern, flags = "") {
+  return checkRegexes([{ source: pattern, flags }])[0] ?? ["時間を測れませんでした"];
 }
 
 // 検査の中身が変わったら、記録しておいた結果を使い直さないための印
 export const CHECKER_ID = createHash("sha256").update(readFileSync(SELF)).digest("hex").slice(0, 12);
 
-if (process.argv[2] === "--probe") {
+// 記録に使う鍵。検査の版・正規表現・flags から作る
+export function regexKey(source, flags = "") {
+  return createHash("sha256").update(CHECKER_ID).update("\0").update(String(source)).update("\0").update(String(flags || "").replace("g", "")).digest("hex").slice(0, 32);
+}
+
+const emit = (o) => writeSync(1, JSON.stringify(o) + "\n");
+
+// 子プロセスの中：worker で1件ずつ測り、KILL_MS のあいだ返事がなければ worker を止めて次へ進む
+async function probeBatch() {
+  const { items, budgetMs } = JSON.parse(readFileSync(0, "utf8"));
+  const deadline = budgetMs == null ? Infinity : Date.now() + budgetMs;
+  let next = 0;
+  while (next < items.length) {
+    if (Date.now() >= deadline) { emit({ done: true, budget: true }); process.exit(0); }
+    next = await new Promise((resolveNext) => {
+      let last = next - 1, settled = false, timer;
+      const w = new Worker(SELF, { workerData: { jaProofreadProbe: true, items, start: next } });
+      const finish = (n) => { if (settled) return; settled = true; clearTimeout(timer); resolveNext(n); };
+      const arm = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => { emit({ i: last + 1, timeout: true }); w.terminate(); finish(last + 2); }, KILL_MS);
+      };
+      arm();
+      w.on("message", (m) => {
+        if (settled) return;
+        emit(m);
+        last = m.i;
+        if (Date.now() >= deadline) { w.terminate(); finish(last + 1); return; }
+        arm();
+      });
+      w.on("error", (e) => { if (settled) return; emit({ i: last + 1, error: e.message }); finish(last + 2); });
+      w.on("exit", () => finish(last + 1));
+    });
+  }
+  emit({ done: true });
+  process.exit(0);
+}
+
+if (!isMainThread && workerData?.jaProofreadProbe) {
+  const { items, start } = workerData;
+  for (let k = start; k < items.length; k++) {
+    let r;
+    try { r = probe(items[k].source, items[k].flags); } catch (e) { r = { error: e.message }; }
+    parentPort.postMessage({ i: k, ...r });
+  }
+} else if (isMain() && process.argv[2] === "--probe") {
   process.stdout.write(JSON.stringify(probe(process.argv[3], process.argv[4] || "")));
+} else if (isMain() && process.argv[2] === "--probe-batch") {
+  probeBatch();
+}
+
+function isMain() {
+  try { return realpathSync(process.argv[1]) === SELF; } catch { return false; }
 }

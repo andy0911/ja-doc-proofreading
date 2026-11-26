@@ -146,4 +146,4 @@ claude plugin update ja-proofread@ja-doc-proofreading
 node <マーケットプレイスの作業コピー>/plugins/ja-proofread/scripts/install-into-project.mjs <プロジェクト>
 ```
 
-<!-- plugin-only -->プラグインとして入れている環境なら、`claude plugin marketplace update ja-doc-proofreading` のあと `node "${CLAUDE_PLUGIN_ROOT}/scripts/install-into-project.mjs" <プロジェクト>` でも同じです。<!-- /plugin-only -->
+<!-- plugin-only -->プラグインとして入れている環境なら、`claude plugin marketplace update ja-doc-proofreading` のあと `node ~/.claude/plugins/marketplaces/ja-doc-proofreading/plugins/ja-proofread/scripts/install-into-project.mjs <プロジェクト>` でも同じです。マーケットプレイスの写し（`marketplaces/` の下）は update で最新になりますが、`${CLAUDE_PLUGIN_ROOT}` は今のセッションが読み込んだキャッシュの版（`cache/` の下）を指すので、そちらから動かすと古い版が同梱されます。`CLAUDE_CODE_PLUGIN_CACHE_DIR` を設定しているときは、`~/.claude/plugins` をその場所に読み替えます。<!-- /plugin-only -->

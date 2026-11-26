@@ -15,6 +15,8 @@ const ok = (name, cond, detail = "") => {
   if (cond) passed++; else failed++;
 };
 const tmp = (p) => mkdtempSync(join(tmpdir(), p));
+// 条件を調べる途中で例外が出ても、テスト全体を止めずに ✗ として数える
+const safe = (f) => { try { return f(); } catch (e) { return false; } };
 
 const OUTER_DATA = process.env.JA_PROOFREAD_DATA || process.env.CLAUDE_PLUGIN_DATA || join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "ja-proofread");
 const DATA = tmp("jp-data-");
@@ -214,19 +216,21 @@ unchanged("入れ子の量指定子 (あ+)+い を拒否し、ファイルは変
 unchanged("長い繰り返しで遅い正規表現を拒否する", [{ action: "add", name: "x", category: "語彙", detect: { type: "regex-count", pattern: "(?:あ|あ)*う", threshold: { minCount: 1 } }, guidance: "x" }]);
 unchanged("長さ0で一致する正規表現を拒否する", [{ action: "add", name: "x", category: "語彙", detect: { type: "regex", pattern: "(?=あ)" }, guidance: "x" }]);
 unchanged("prh の /…/ 形式も同じ検査をする", [{ action: "prh", expected: "テスト", patterns: ["/(テ+)+ト/"] }]);
-unchanged("途中で失敗したら prh.yml も書き換えない", [{ action: "prh", expected: "問い合わせ", patterns: ["問合せ"] }, { action: "add", name: "壊れた型", category: "語彙", detect: { type: "regex", pattern: "(" }, guidance: "x" }]);
+// 反映の見本には、本番の台帳や辞書に入りそうにない語を使う（grow-ledger の例と同じ語だと、本物の辞書に入ったときに落ちる）
+const SAMPLE_EXPECTED = "試験用の語ゑ", SAMPLE_PATTERN = "しけんようのごゑ";
+unchanged("途中で失敗したら prh.yml も書き換えない", [{ action: "prh", expected: SAMPLE_EXPECTED, patterns: [SAMPLE_PATTERN] }, { action: "add", name: "壊れた型", category: "語彙", detect: { type: "regex", pattern: "(" }, guidance: "x" }]);
 unchanged("知らない action はエラー", [{ action: "delete", id: "P001" }]);
 unchanged("prh の重複（既にある expected）はエラー", [{ action: "prh", expected: "ユーザー", patterns: ["ユーザ―"] }]);
 unchanged("prh の重複（既にある pattern）はエラー", [{ action: "prh", expected: "お得な", patterns: ["おトク"] }]);
 const before2 = json(readFileSync(join(ROOT, ".claude-plugin/plugin.json"), "utf8")).version;
 r = applyItems([
   { notionPageId: "t1", action: "add", name: "テスト用の型", category: "言い回し", level: "should", detect: { type: "regex-count", pattern: "することが重要", threshold: { minCount: 2 } }, guidance: "具体的に書く" },
-  { notionPageId: "t2", action: "prh", expected: "問い合わせ", patterns: ["問合せ"] },
+  { notionPageId: "t2", action: "prh", expected: SAMPLE_EXPECTED, patterns: [SAMPLE_PATTERN] },
 ]);
-const after2 = json(readFileSync(join(repo, "plugins/ja-proofread/.claude-plugin/plugin.json"), "utf8")).version;
+const after2 = safe(() => json(readFileSync(join(repo, "plugins/ja-proofread/.claude-plugin/plugin.json"), "utf8")).version);
 const [a, b] = before2.split(".").map(Number);
 ok("反映で2桁目のバージョンが上がる", r.status === 0 && after2 === `${a}.${b + 1}.0`, r.stderr + ` ${before2}->${after2}`);
-ok("CHANGELOG に追記され、prh.yml にも足される", /テスト用の型/.test(readFileSync(join(repo, "CHANGELOG.md"), "utf8")) && /問合せ/.test(readFileSync(join(repo, "plugins/ja-proofread/data/prh.yml"), "utf8")));
+ok("CHANGELOG に追記され、prh.yml にも足される", safe(() => /テスト用の型/.test(readFileSync(join(repo, "CHANGELOG.md"), "utf8")) && readFileSync(join(repo, "plugins/ja-proofread/data/prh.yml"), "utf8").includes(SAMPLE_PATTERN)), r.stderr);
 r = run([ledgerJs, "validate"]);
 ok("反映したあとの台帳と辞書も validate を通る", r.status === 0, r.stderr);
 const lone = tmp("jp-lone-");
@@ -385,6 +389,163 @@ const bumpScript = resolve(ROOT, "..", "..", ".github/scripts/check-version-bump
 const bumpTo = (v) => { write(vb, "plugins/ja-proofread/.claude-plugin/plugin.json", JSON.stringify({ version: v })); g("commit", "-qam", v); return spawnSync("bash", [bumpScript, "base"], { cwd: vb, encoding: "utf8" }); };
 ok("check-version-bump.sh は版を下げると落ちる", bumpTo("0.1.9").status === 1);
 ok("check-version-bump.sh は版を上げると通る", bumpTo("0.10.0").status === 0);
+
+// 18. 0.1.3 で直した不具合の再現
+const hasDeps = existsSync(join(OUTER_DATA, "deps", "node_modules", "prh"));
+const prhProj = (yml, extra = {}) => {
+  const d = tmp("jp-prh3-");
+  for (const [name, body] of Object.entries({ "team.yml": yml, ...extra })) write(d, name, body);
+  writeFileSync(join(d, ".ja-proofread.json"), JSON.stringify({ prh: ["team.yml"] }));
+  return d;
+};
+const prhWarn = (rep) => (rep.warnings || []).join(" / ");
+const prhMsgs = (rep) => (rep.files?.[0]?.findings || []).filter((f) => f.ruleId === "prh").map((f) => f.message);
+if (!hasDeps) console.log("- （依存がないため、プロジェクトの prh 辞書の確認は飛ばしました）");
+else {
+  // 1. imports 先と、1行の配列の patterns も検査する。外すのは使えない規則だけ
+  const impDir = prhProj("version: 1\nimports:\n  - ./sub.yml\nrules:\n  - expected: 正しい語甲\n    patterns:\n      - ただしいごこう\n", {
+    "sub.yml": "version: 1\nrules:\n  - expected: 危ない語\n    patterns: [ \"/(?:あ+)+い/\" ]\n  - expected: 正しい語乙\n    patterns: [ \"/ただしいごおつ(?!ゑ)/\" ]\n",
+  });
+  const impDoc = write(impDir, "d.md", "# 語\n\nただしいごこうとただしいごおつを書きます。\n");
+  const impRep = proofread(impDoc, [], { cwd: impDir, timeout: 60000 });
+  ok("prh の imports 先にある危ない正規表現も見つけて、その規則だけを外す", /危ない語/.test(prhWarn(impRep)) && /その規則だけを外しました/.test(prhWarn(impRep)), prhWarn(impRep));
+  ok("imports 先の使える規則と、元の辞書の規則は使われる", prhMsgs(impRep).some((m) => /正しい語甲/.test(m)) && prhMsgs(impRep).some((m) => /正しい語乙/.test(m)), JSON.stringify(prhMsgs(impRep)));
+  const arrDir = prhProj("version: 1\nrules:\n  - expected: 危ない語\n    patterns: [ \"/(?:あ+)+い/\" ]   # 行末のコメント\n  - expected: 正しい語丙\n    pattern: ただしいごへい\n");
+  const arrRep = proofread(write(arrDir, "d.md", "# 語\n\nただしいごへいを書きます。\n"), [], { cwd: arrDir, timeout: 60000 });
+  ok("1行の配列 patterns: [ \"/(?:あ+)+い/\" ] も検査して外し、ほかの規則は使う", /危ない語/.test(prhWarn(arrRep)) && prhMsgs(arrRep).some((m) => /正しい語丙/.test(m)), prhWarn(arrRep) + JSON.stringify(prhMsgs(arrRep)));
+
+  // 2. 831件の辞書：検査は全件を1つの子プロセスで測り、結果は正規表現ごとに残す。1件拒否しても毎回測り直さない
+  const kana = "アイウエオカキクケコサシスセソタチツテトナニヌネノ";
+  const big = ["version: 1", "rules:"];
+  for (let i = 0; i < 831; i++) {
+    const w = kana[i % 25] + kana[(i * 7) % 25] + kana[(i * 11) % 25] + i;
+    if (i % 3 === 0) big.push(`  - expected: 正${i}`, "    patterns:", `      - /${w}(?![ァ-ヶー])/`);
+    else if (i % 3 === 1) big.push(`  - expected: 正${i}`, `    patterns: [ "${w}", "/${w}ゑ?/" ]`);
+    else big.push(`  - expected: 正${i}`, `    pattern: ${w}`);
+  }
+  big.push("  - expected: 遅い語", "    patterns:", "      - /-*-*-*[^-]/");
+  const bigDir = prhProj(big.join("\n") + "\n");
+  const bigData = tmp("jp-bigdata-");
+  symlinkSync(join(OUTER_DATA, "deps"), join(bigData, "deps"));
+  const bigDoc = write(bigDir, "d.md", "# 語\n\nアアア0 とイクシ1 を書きます。\n");
+  const timeRun = () => { const t = Date.now(); const rep = proofread(bigDoc, [], { cwd: bigDir, env: { JA_PROOFREAD_DATA: bigData }, timeout: 120000 }); return { rep, ms: Date.now() - t }; };
+  const b1 = timeRun(), b2 = timeRun();
+  const bigOk = (x) => /遅い語/.test(prhWarn(x.rep)) && prhMsgs(x.rep).some((m) => /正0/.test(m)) && prhMsgs(x.rep).some((m) => /正1/.test(m));
+  ok(`831件の辞書：1件だけ外して残りを使う（1回目 ${b1.ms}ms、2回目 ${b2.ms}ms）`, bigOk(b1) && bigOk(b2), prhWarn(b1.rep) + JSON.stringify(prhMsgs(b1.rep)));
+  ok("831件の辞書の検査は1回目でも8秒以内、2回目は記録を使い5秒以内", b1.ms < 8000 && b2.ms < 5000, `${b1.ms} / ${b2.ms}`);
+  const cacheFile = safe(() => json(readFileSync(join(bigData, "regex-checked.json"), "utf8")));
+  ok("拒否した結果も正規表現ごとに記録する", !!cacheFile && Object.values(cacheFile).some((v) => Array.isArray(v) && v.some((e) => /秒以内|ms かかりました/.test(e))) && Object.keys(cacheFile).length >= 832, cacheFile && Object.keys(cacheFile).length);
+}
+
+// 3. コードの隠し方：二重バッククォート、4つのフェンスの中の ```、箇条書きの中のフェンス、4字下げのコード、閉じないフェンス
+const codeCases = {
+  "二重バッククォート": "作例は ``<!-- textlint-disable -->`` と書きます。\n",
+  "4つのバッククォートのフェンス": "````markdown\n```\n<!-- textlint-disable -->\n```\n````\n",
+  "箇条書きの中の字下げしたフェンス": "- 手順\n\n  ```\n  <!-- textlint-disable -->\n  ```\n",
+  "4字下げのコードブロック": "例：\n\n    <!-- textlint-disable -->\n",
+};
+const { disabledRanges: dr2, maskCode: mc2, codeRanges: cr2 } = await import(join(ROOT, "scripts/structure-check.mjs"));
+for (const [label, body] of Object.entries(codeCases)) {
+  const doc = write(WORK, `code-${Object.keys(codeCases).indexOf(label)}.md`, `# 書き方\n\n${body}\n網羅的に調べました。\n`);
+  const ids3 = idsOf(proofread(doc));
+  ok(`${label}の中の textlint-disable で以降の指摘が消えない（依存ありの構文木）`, ids3.has("P008"), [...ids3].join(","));
+  const text = readFileSync(doc, "utf8");
+  ok(`${label}の中の textlint-disable を範囲にしない（依存なしの正規表現）`, safe(() => dr2(text).length === 0), safe(() => JSON.stringify(dr2(text))));
+}
+const unclosed = "# 書き方\n\n網羅的に調べました。\n\n```\n<!-- textlint-disable -->\n網羅的なコード\n";
+ok("閉じないフェンスは文末までコードとして隠す（依存なし）", safe(() => dr2(unclosed).length === 0 && !mc2(unclosed).includes("網羅的なコード") && mc2(unclosed).includes("網羅的に調べました")), safe(() => JSON.stringify(mc2(unclosed))));
+const posDoc = "a ``b`` c\n\n```\nx\n```\n\n    y\n";
+ok("隠しても長さと改行の位置は変わらない", safe(() => mc2(posDoc).length === posDoc.length && [...mc2(posDoc)].every((ch, i) => (ch === "\n") === (posDoc[i] === "\n")) && cr2(posDoc).length === 3), safe(() => JSON.stringify(mc2(posDoc))));
+ok("本物の textlint-disable は、フェンスやコードのあとでも範囲になる（依存なし）", safe(() => dr2("```\nx\n```\n\n`a`\n\n<!-- textlint-disable -->\nb\n").length === 1));
+
+// 4. P002 は改行に当たらない。コードを空白にした長い文書でも速い
+const { checkRegex: cr4, checkRegexes: crs4 } = await import(join(ROOT, "scripts/regex-safety.mjs"));
+ok("古い P002（^\\s*…、m）は、空白と改行の混ざった見本で拒否される", safe(() => cr4("^\\s*(?:[-*+]\\s+|\\d+[.)]\\s+)?(?:\\*\\*)?[^\\s:：*]{1,12}(?:\\*\\*)?[：:](?!//)", "m").length > 0));
+const p2 = ledger.patterns.find((p) => p.id === "P002");
+ok("新しい P002 は改行に当たらない形（^[ \\t]*）で、検査を通る", safe(() => p2.detect.pattern.startsWith("^[ \\t]*") && cr4(p2.detect.pattern, p2.detect.flags).length === 0), p2.detect.pattern);
+const codeHeavy = "# 大きな文書\n\n" + ("説明の文です。\n\n```js\n" + "    const value = compute(alpha, beta);\n".repeat(30) + "```\n\n").repeat(400);
+t0 = Date.now();
+runStructureChecks(codeHeavy, ledger, "doc");
+const chMs = Date.now() - t0;
+ok(`コードの多い約${Math.round(codeHeavy.length / 1024)}KB の文書でも構成チェックが3秒以内（${chMs}ms）`, chMs < 3000);
+const chDoc = write(WORK, "code-heavy.md", codeHeavy);
+t0 = Date.now();
+const chRep = proofread(chDoc, [], { timeout: 120000 });
+ok(`同じ文書の校正全体が60秒以内（${Date.now() - t0}ms）`, Date.now() - t0 < 60000 && chRep.files?.length === 1, chRep.lintError);
+
+// 5. .ja-proofread.json の型
+const typeCases = [
+  [{ include: "**/*.md" }, /include は文字列の配列/],
+  [{ exclude: [1] }, /exclude は文字列の配列/],
+  [{ disable: "P001" }, /disable は文字列の配列/],
+  [{ prh: "team.yml" }, /prh は文字列の配列/],
+  [{ profiles: ["slide"] }, /profiles はオブジェクト/],
+  [{ hook: true }, /hook はオブジェクト/],
+  [{ hook: { blockOn: "sometimes" } }, /hook\.blockOn は/],
+  [{ hook: { enabled: "yes" } }, /hook\.enabled は真偽値/],
+];
+for (const [conf, re] of typeCases) {
+  const d = tmp("jp-type-");
+  writeFileSync(join(d, ".ja-proofread.json"), JSON.stringify(conf));
+  write(d, "b.md", "# メモ\n\n出来ることを書きます。\n");
+  const cli = run([S("proofread.mjs"), join(d, "b.md")], { cwd: d });
+  const hk = json(run([S("hook-post-edit.mjs")], { input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: join(d, "b.md") }, cwd: d }), env: { CLAUDE_PROJECT_DIR: d } }).stdout);
+  ok(`.ja-proofread.json ${JSON.stringify(conf)} は CLI が止まり、フックが知らせる`, cli.status === 2 && re.test(cli.stderr) && re.test(hk.hookSpecificOutput?.additionalContext || ""), cli.stderr + JSON.stringify(hk));
+}
+const badIn = run([S("hook-post-edit.mjs")], { input: "これは JSON ではない" });
+ok("フックの中で思わぬ失敗があっても additionalContext で知らせる", /校正していません/.test(json(badIn.stdout).hookSpecificOutput?.additionalContext || "") && badIn.status === 0, badIn.stdout + badIn.stderr);
+
+// 6. 繰り返すグループの中の選択：重ならない1文字の選択は通し、重なるものは拒否する
+const altRes = safe(() => crs4([
+  { source: "(?:、|,)+", flags: "" }, { source: "(?:の|が){2,}", flags: "" }, { source: "(?:\\s|\\u2028)+x", flags: "" }, { source: "(?:[a-z]|\\d)+", flags: "" },
+  { source: "(?:[一-龯]|[一-龯])+", flags: "" }, { source: "(?:\\s|　)+$", flags: "" }, { source: "(?:a|A)+b", flags: "i" }, { source: "(?:、|,|、、)+", flags: "" },
+])) || [];
+ok("(?:、|,)+、(?:の|が){2,}、(?:[a-z]|\\d)+ は通る", safe(() => altRes[0].length === 0 && altRes[1].length === 0 && altRes[3].length === 0), JSON.stringify(altRes.slice(0, 4)));
+ok("重なる選択（[一-龯]|[一-龯]、\\s|全角空白、i での a|A、2文字の選択肢）は拒否する", altRes.length === 8 && altRes.slice(2, 3).concat(altRes.slice(4)).every((x) => x.length > 0), JSON.stringify(altRes));
+
+// 7. ASCII の記号と、正規表現に出てくる文字の長い繰り返し
+const symRes = safe(() => [["-*-*-*[^-]", ""], ["=*=*=*[^=]", ""], ["ゑ*ゑ*ゑ*[^ゑ]", ""], ["[ゐゑ]*[ゐゑ]*[ゐゑ]*x", ""]].map(([p, f]) => cr4(p, f))) || [];
+ok("-*-*-*[^-] などの ASCII 記号と、正規表現に出てくる文字（ゑ、[ゐゑ]）の繰り返しで遅いものを拒否する", symRes.length === 4 && symRes.every((x) => x.length > 0), JSON.stringify(symRes));
+
+// 8. 壊れた hook-last.json
+for (const broken of ["null", '{"x":null,"y":{"sigs":null},"z":[1]}', "[]", '{"a":{"sigs":[1,2]}}']) {
+  const d = tmp("jp-last-");
+  writeFileSync(join(d, ".ja-proofread.json"), JSON.stringify({ profile: "doc" }));
+  write(d, "m.md", "# メモ\n\n網羅的に書きます。\n");
+  const data = tmp("jp-lastdata-");
+  if (existsSync(join(OUTER_DATA, "deps"))) symlinkSync(join(OUTER_DATA, "deps"), join(data, "deps"));
+  writeFileSync(join(data, "hook-last.json"), broken);
+  const hr = run([S("hook-post-edit.mjs")], { input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: join(d, "m.md") }, cwd: d }), env: { CLAUDE_PROJECT_DIR: d, JA_PROOFREAD_DATA: data } });
+  const after = safe(() => json(readFileSync(join(data, "hook-last.json"), "utf8")));
+  ok(`hook-last.json が ${broken} でもフックが動き、作り直す`, /P008/.test(json(hr.stdout).hookSpecificOutput?.additionalContext || "") && after && typeof after === "object" && Object.values(after).every((v) => Array.isArray(v?.sigs)), hr.stdout.slice(0, 200) + hr.stderr.slice(0, 200));
+}
+
+// 9. --remove は同梱したものだけを消す
+const rmProj = tmp("jp-rm-");
+r = run([S("install-into-project.mjs"), rmProj, "--remove"]);
+ok("同梱したことのないプロジェクトでは --remove は何もしない", r.status === 0 && !existsSync(join(rmProj, ".claude")), r.stdout + r.stderr);
+r = run([S("install-into-project.mjs"), rmProj]);
+write(rmProj, ".claude/skills/ja-proofread-mine/SKILL.md", "---\nname: ja-proofread-mine\n---\n自分のスキル\n");
+r = run([S("install-into-project.mjs"), rmProj]);
+ok("同梱をやり直しても、利用者の ja-proofread-mine は消えない", existsSync(join(rmProj, ".claude/skills/ja-proofread-mine/SKILL.md")), r.stderr);
+r = run([S("install-into-project.mjs"), rmProj, "--remove"]);
+ok("--remove は利用者の ja-proofread-mine を残し、同梱したスキルとサブエージェントを消す", r.status === 0 && existsSync(join(rmProj, ".claude/skills/ja-proofread-mine/SKILL.md")) && !existsSync(join(rmProj, ".claude/skills/ja-proofread-proofread")) && !existsSync(join(rmProj, ".claude/agents")), r.stderr);
+ok("同梱で作った {} だけの settings.json と空の agents/ は消える", !existsSync(join(rmProj, ".claude/settings.json")) && !existsSync(join(rmProj, ".claude/settings.json.bak")), safe(() => readFileSync(join(rmProj, ".claude/settings.json"), "utf8")));
+const rmProj2 = tmp("jp-rm2-");
+run([S("install-into-project.mjs"), rmProj2]);
+r = run([S("install-into-project.mjs"), rmProj2, "--remove"]);
+ok("何もなかったプロジェクトに同梱して --remove すると .claude ごと消える", r.status === 0 && !existsSync(join(rmProj2, ".claude")), r.stdout + r.stderr);
+
+// 10. flags の gg、marketplace.json の version
+ok("flags の gg を拒否する", safe(() => cr4("あ", "gg").length > 0 && cr4("あ", "g").length === 0));
+const mRepo = tmp("jp-mrepo-");
+const mLedgerJs = makeRepo(mRepo);
+const mVersion = json(readFileSync(join(mRepo, "plugins/ja-proofread/.claude-plugin/plugin.json"), "utf8")).version;
+writeFileSync(join(mRepo, ".claude-plugin/marketplace.json"), JSON.stringify({ name: "x", plugins: [{ name: "ja-proofread", source: "./plugins/ja-proofread", version: mVersion }] }));
+r = run([mLedgerJs, "validate"]);
+ok("validate は marketplace.json の version を、plugin.json と同じ版でも拒否する（版は plugin.json だけに書く）", r.status === 1 && /marketplace\.json/.test(r.stderr), r.stderr);
+const realMarket = json(readFileSync(resolve(ROOT, "..", "..", ".claude-plugin/marketplace.json"), "utf8"));
+ok("このリポジトリの marketplace.json に version がない", !realMarket.plugins?.some((p) => p.version !== undefined));
 
 console.log(failed ? `\n${passed + failed} 項目中 ${failed} 件失敗` : `\n${passed} 項目すべて成功`);
 process.exit(failed ? 1 : 0);

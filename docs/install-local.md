@@ -26,14 +26,12 @@ gh auth setup-git
 ssh -T git@github.com
 ```
 
-B の SSH は、次の2つがそろっているときだけ使えます。Claude Code は git をパスフレーズや確認の入力なしで動かすため、どちらかが欠けると取得に失敗します。
+Claude Code は git を、パスフレーズや確認の入力を求めない設定で動かします。そのため、どちらの方法も「入力なしで通る」状態にしておきます。
 
-- 鍵が ssh-agent に入っている（`ssh-add -l` に表示される）。パスフレーズつきの鍵は、先に `ssh-add` で入れておく
-- `~/.ssh/known_hosts` に github.com がある（一度 `ssh -T git@github.com` を実行して、ホストの確認に答えておく）
+- A の HTTPS：認証ヘルパーに資格情報が保存されていること。保存されていれば使われ、入力を求めるヘルパーは失敗します。`gh auth login` のあと `gh auth setup-git` で保存されます
+- B の SSH：パスフレーズを聞かれずに使える鍵であること（パスフレーズつきの鍵なら、先に `ssh-add` で ssh-agent に入れておき、`ssh-add -l` に表示されるのを確かめる）。あわせて、`~/.ssh/known_hosts` に github.com があること（一度 `ssh -T git@github.com` を実行して、ホストの確認に答えておく）
 
-（[Add a private marketplace](https://code.claude.com/docs/en/plugins/install.md#add-a-private-marketplace)）
-
-`owner/repo` の形で追加すると、Claude Code は先に SSH を試し、通らなければ HTTPS で取得します。HTTPS に固定したいときは `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` を設定します。
+`andy0911/ja-doc-proofreading` のような `owner/repo` の形で追加すると、Claude Code は先に `ssh -T git@github.com` で SSH を試し、通れば SSH で取得します。その確認か SSH での取得そのものが失敗すると、HTTPS に切り替えて取得します。そのため、SSH の鍵が使えなくても、A の設定があれば取得できます。SSH を試さず最初から HTTPS にしたいときは `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` を設定します（[Grant access to a private marketplace](https://code.claude.com/docs/en/plugins/host-marketplace#grant-access-to-a-private-marketplace)、[Add a private marketplace](https://code.claude.com/docs/en/plugins/install.md#add-a-private-marketplace)）。
 
 ## 2. マーケットプレイスを追加して、プラグインを入れる
 
@@ -54,7 +52,11 @@ Claude Code の中からなら、`/plugin marketplace add andy0911/ja-doc-proofr
 
 ## 3. 動くか確かめる
 
-1. Claude Code を起動し直します。最初の起動で、textlint とルールが自動で入ります（数十秒）。入れる先はプラグインのデータ置き場 `~/.claude/plugins/data/ja-proofread-ja-doc-proofreading/` です。プラグインを更新しても残ります。検出の記録と誤検知の記録も同じ場所に入ります。
+1. Claude Code を起動し直します。textlint とルール（依存）は、次のどちらかで自動で入ります。
+   - Claude Code が入れられれば、プラグインをキャッシュ（`~/.claude/plugins/cache/ja-doc-proofreading/ja-proofread/<版>/`）にコピーするときに、そこの `node_modules` に入ります。公式の説明では、プラグインの直下に `package.json` とロックファイル（`package-lock.json` など）があると、インストールや更新でキャッシュに写すたびに依存を入れます。入れるのはロックファイルのとおりの版だけで、インストールスクリプトは動かさず、60秒で打ち切ります（[Node.js package dependencies](https://code.claude.com/docs/en/plugins/loading#node-js-package-dependencies)）。このプラグインは `package.json` と `package-lock.json` を置いています。
+   - それができなかったとき（入れ終わらなかった、npm が見つからない、など）は、最初の起動で SessionStart のフックがプラグインのデータ置き場 `~/.claude/plugins/data/ja-proofread-ja-doc-proofreading/deps/` に入れます（数十秒）。データ置き場はプラグインを更新しても残ります。
+
+   どちらで入ったかは、実機では確かめていません。キャッシュに入っていれば、フックは入れ直しません。検出の記録と誤検知の記録は、どちらの場合もデータ置き場に入ります。
 2. 入ったものを確かめます。
 
 ```bash
@@ -77,7 +79,7 @@ cp ~/.claude/plugins/marketplaces/ja-doc-proofreading/plugins/ja-proofread/templ
 
 例の設定は `include` が `docs/**/*.md` と `slides/**/*.md` だけなので、`docs/` と `slides/` の下の Markdown しか自動チェックしません。ほかの場所の文書も見るときは、`include` にそのパスに合う glob を足します。パスは `.ja-proofread.json` のある場所からの相対パスで比べます（例：直下の `README.md` は `*.md` か `**/*.md` に合い、`docs/**/*.md` には合いません）。`include` を書かなければ、既定の `**/*.md` と `**/*.txt` を使います。
 
-`.ja-proofread.json` が JSON として読めないとき（末尾のカンマやコメントがあるときなど）は、黙って既定値にはせず、フックは「設定を読めない」と Claude に知らせ、`proofread.mjs` は終了コード2で止まります。
+`.ja-proofread.json` が JSON として読めないとき（末尾のカンマやコメントがあるときなど）や、値の型が違うとき（`"include": "**/*.md"` のように配列にすべきところが文字列、`hook.blockOn` が `must`・`should`・`info`・`never` 以外、`hook.enabled` が真偽値でない、など）は、黙って既定値にはせず、フックは「設定を読めない」と Claude に知らせ、`proofread.mjs` は終了コード2で止まります。
 
 主な設定は次のとおりです。
 
@@ -87,7 +89,7 @@ cp ~/.claude/plugins/marketplaces/ja-doc-proofreading/plugins/ja-proofread/templ
 | `profiles` | パスごとの種類。例：`{"slides/**": "slide"}` |
 | `include` / `exclude` | 自動チェックする・しないファイル。`exclude` に書いたものは既定の除外（`**/node_modules/**`、`.claude/**`、`**/CLAUDE.md` など）に足され、既定は消えません |
 | `disable` | 使わない型やルールのID。例：`["P010"]` |
-| `prh` | チームの表記辞書を足す |
+| `prh` | チームの表記辞書を足す（文字列の配列）。辞書は prh 本体で読み、`imports` 先も含めて規則ごとに正規表現を検査します。長い文で止まるおそれのある規則はその規則だけを外し、外したことを表示します。検査の結果はデータ置き場に記録し、変わった規則だけを測り直します |
 | `hook.blockOn` | Claude に直させる重さ。`must`（既定）、`should`、`info`、`never` |
 
 フックが Claude に直させる（止める）のは、前回の結果になかった指摘だけです。ただし、そのファイルを初めて編集したときは前回の結果がないので、もとからある指摘も「新しい指摘」と数えます。初めて触る既存の文書では、以前からある `must` の指摘でも1回は止まります。2回目からは、同じ指摘が残っているだけなら止まりません。
@@ -115,7 +117,7 @@ claude plugin marketplace update ja-doc-proofreading
 claude plugin update ja-proofread@ja-doc-proofreading
 ```
 
-自動で更新したいときは、`/plugin` の Marketplaces タブで、このマーケットプレイスの自動更新をオンにします。自動更新は、対話セッションで最初のメッセージを送ったあと、最大10分ほど待ってから行われます。更新されても、動いているセッションは読み込んだ版のままなので、`Run /reload-plugins to apply` と出たら `/reload-plugins` を実行するか、次に起動したときに新しい版が使われます（[Plugin loading reference](https://code.claude.com/docs/en/plugins/loading.md#when-auto-update-runs)）。起動時の自動更新は、入力を求めない認証しか使えません。HTTPS なら `gh auth setup-git` などの認証ヘルパー、SSH なら ssh-agent に鍵を入れ、github.com を `known_hosts` に入れておきます。`GITHUB_TOKEN` だけでは、起動時の自動更新は認証されません。
+自動で更新したいときは、`/plugin` の Marketplaces タブで、このマーケットプレイスの自動更新をオンにします。自動更新は、対話セッションで最初のメッセージを送ったあと、最大10分ほど待ってから行われます。更新されても、動いているセッションは読み込んだ版のままなので、`Run /reload-plugins to apply` と出たら `/reload-plugins` を実行するか、次に起動したときに新しい版が使われます（[Plugin loading reference](https://code.claude.com/docs/en/plugins/loading.md#when-auto-update-runs)）。自動更新（裏で動く更新）は、入力を求めない認証しか使えません。HTTPS なら `gh auth setup-git` などで資格情報を保存した認証ヘルパー、SSH なら ssh-agent に鍵を入れ、github.com を `known_hosts` に入れておきます。`GITHUB_TOKEN` だけでは、自動更新は認証されません。認証が通らないときは、更新は黙って失敗し、前の版のまま動きます（[What background auto-update does with credentials](https://code.claude.com/docs/en/plugins/host-marketplace#what-background-auto-update-does-with-credentials)）。
 
 ## 7. 仲間にも使ってもらう
 

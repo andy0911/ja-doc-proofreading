@@ -12,7 +12,7 @@ import { join, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { ROOT, dataDir, loadLedger, readJSON, PROFILES } from "./lib.mjs";
-import { checkRegex } from "./regex-safety.mjs";
+import { checkRegexes } from "./regex-safety.mjs";
 
 const LEDGER = join(ROOT, "data", "ledger.json");
 const PRH = join(ROOT, "data", "prh.yml");
@@ -20,10 +20,11 @@ const PLUGIN_JSON = join(ROOT, ".claude-plugin", "plugin.json");
 const REPO = resolve(ROOT, "..", "..");
 const MARKETPLACE_JSON = join(REPO, ".claude-plugin", "marketplace.json");
 
-// マーケットプレイスの定義に書いたこのプラグインの version（無ければ undefined）
+// マーケットプレイスの定義のうち、このプラグインの項目（無ければ undefined）。
+// 版は plugin.json だけに書く（公式の Release a new version が、plugin.json と marketplace.json の両方に書かないよう勧めているため）
 function marketplaceEntry() {
   const m = readJSON(MARKETPLACE_JSON, null);
-  return m && Array.isArray(m.plugins) ? { m, e: m.plugins.find((p) => p.name === "ja-proofread") } : { m, e: undefined };
+  return m && Array.isArray(m.plugins) ? m.plugins.find((p) => p.name === "ja-proofread") : undefined;
 }
 const CATEGORIES = ["語彙", "言い回し", "書式", "構成", "表記"];
 const LEVELS = ["must", "should", "info"];
@@ -40,6 +41,7 @@ function arg(name) {
 export function validateLedger(ledger, { pluginVersion } = {}) {
   const errors = [];
   const ids = new Set();
+  const regexes = [];
   if (!/^\d+\.\d+\.\d+$/.test(ledger.version || "")) errors.push("version が x.y.z の形ではありません");
   else if (pluginVersion && ledger.version !== pluginVersion) errors.push(`台帳の version（${ledger.version}）が plugin.json の version（${pluginVersion}）と違います。そろえてください`);
   for (const p of ledger.patterns || []) {
@@ -66,12 +68,12 @@ export function validateLedger(ledger, { pluginVersion } = {}) {
     }
     const t = p.detect?.type;
     if (!TYPES.includes(t)) { errors.push(`${where}: detect.type は ${TYPES.join("/")} のどれかです`); continue; }
-    if (t === "regex" || t === "regex-count" || p.detect.pattern) {
-      for (const e of checkRegex(p.detect.pattern, p.detect.flags)) errors.push(`${where}: ${e}`);
-    }
+    if (t === "regex" || t === "regex-count" || p.detect.pattern) regexes.push({ where, source: p.detect.pattern, flags: p.detect.flags });
     if (t === "structure" && !DETECTORS.includes(p.detect.detector)) errors.push(`${where}: detector は ${DETECTORS.join("/")} のどれかです`);
     if (t === "review" && !p.id.startsWith("R")) errors.push(`${where}: レビュー観点だけの型は R から始まる id にしてください`);
   }
+  // 正規表現はまとめて1つの子プロセスで測る
+  checkRegexes(regexes).forEach((r, n) => { for (const e of r ?? ["時間を測れませんでした"]) errors.push(`${regexes[n].where}: ${e}`); });
   return errors;
 }
 
@@ -102,6 +104,7 @@ export function validatePrh(parsed) {
   const errors = [...parsed.errors];
   const expected = new Map();
   const patterns = new Map();
+  const regexes = [];
   for (const r of parsed.rules) {
     const where = `prh.yml ${r.line}行「${r.expected}」`;
     if (!r.expected) errors.push(`${where}: expected が空です`);
@@ -112,10 +115,13 @@ export function validatePrh(parsed) {
       if (!p) { errors.push(`${where}: 空の pattern があります`); continue; }
       if (patterns.has(p)) errors.push(`${where}: pattern「${p}」が ${patterns.get(p)}行と重複しています`);
       patterns.set(p, r.line);
+      // prh は /…/ を gmu（i があれば gimu）の flags で組み立てるので、同じ flags で確かめる
       const m = /^\/(.*)\/([a-z]*)$/.exec(p);
-      if (m) for (const e of checkRegex(m[1], m[2])) errors.push(`${where}: pattern ${p}: ${e}`);
+      if (m) regexes.push({ where: `${where}: pattern ${p}`, source: m[1], flags: m[2].includes("i") ? "imu" : "mu", given: m[2] });
     }
   }
+  for (const x of regexes) if (!/^[gimy]*$/.test(x.given) || new Set(x.given).size !== x.given.length) errors.push(`${x.where}: prh の /…/ の flags に使えるのは g i m y だけで、同じ文字は1回までです`);
+  checkRegexes(regexes).forEach((r, n) => { for (const e of r ?? ["時間を測れませんでした"]) errors.push(`${regexes[n].where}: ${e}`); });
   return errors;
 }
 
@@ -157,8 +163,8 @@ if (cmd === "list") {
 } else if (cmd === "validate") {
   const pluginVersion = readJSON(PLUGIN_JSON)?.version;
   const errors = [...validateLedger(loadLedger(), { pluginVersion }), ...validatePrh(parsePrh(readFileSync(PRH, "utf8")))];
-  const mv = marketplaceEntry().e?.version;
-  if (mv !== undefined && mv !== pluginVersion) errors.push(`marketplace.json の version（${mv}）が plugin.json の version（${pluginVersion}）と違います。そろえてください`);
+  const mv = marketplaceEntry()?.version;
+  if (mv !== undefined) errors.push(`marketplace.json の ja-proofread に version（${mv}）があります。版は plugin.json だけに書き、marketplace.json からは消してください（両方に書くと plugin.json が黙って優先されます）`);
   if (errors.length) { console.error(errors.map((e) => "- " + e).join("\n")); process.exit(1); }
   console.log("台帳と辞書に問題はありません");
 } else if (cmd === "fp") {
@@ -239,6 +245,7 @@ if (cmd === "list") {
     }
   });
   errors.push(...validateLedger(ledger), ...validatePrh(parsePrh(prhText)));
+  if (marketplaceEntry()?.version !== undefined) errors.push("marketplace.json の ja-proofread に version があります。版は plugin.json だけで上げるので、先に marketplace.json から消してください");
   if (errors.length) { console.error("反映をやめました。ファイルは変えていません：\n" + errors.map((e) => "- " + e).join("\n")); process.exit(1); }
   const prhChanged = prhText !== readFileSync(PRH, "utf8") && applied.some((a) => a.action === "prh");
   if (JSON.stringify(ledger) === before && !prhChanged) { console.log("変更はありません"); process.exit(0); }
@@ -257,15 +264,8 @@ if (cmd === "list") {
   const cl = join(REPO, "CHANGELOG.md");
   const head = existsSync(cl) ? readFileSync(cl, "utf8") : "# 変更履歴\n";
   const [title, ...rest] = head.split("\n");
-  // marketplace.json にこのプラグインの version を書いているなら、同じ版にそろえる
-  const { m: market, e: entry } = marketplaceEntry();
-  const marketOut = [];
-  if (entry && entry.version !== undefined) {
-    entry.version = newVersion;
-    marketOut.push([MARKETPLACE_JSON, JSON.stringify(market, null, 2) + "\n"]);
-  }
+  // 版は plugin.json だけで上げる（marketplace.json には書かない。validate がそれを確かめる）
   const outputs = [
-    ...marketOut,
     [LEDGER, JSON.stringify(ledger, null, 2) + "\n"],
     [PRH, prhText],
     [PLUGIN_JSON, JSON.stringify(plugin, null, 2) + "\n"],

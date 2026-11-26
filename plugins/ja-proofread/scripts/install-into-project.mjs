@@ -6,7 +6,7 @@
 //
 //   node install-into-project.mjs <プロジェクトのディレクトリ>            同梱する（やり直すと最新版で入れ替える）
 //   node install-into-project.mjs <プロジェクトのディレクトリ> --remove   同梱をやめる
-import { cpSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, readdirSync, copyFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, rmdirSync, readdirSync, copyFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { ROOT, readJSON } from "./lib.mjs";
 
@@ -37,13 +37,32 @@ function removeHooks(settings) {
   return settings;
 }
 
-function removeVendored() {
+// 同梱したものの一覧（.claude/ja-proofread/vendored.json）。消すときは、ここに書いたものだけを消す。
+// 利用者が自分で置いた .claude/skills/ja-proofread-mine のようなものは消さないため
+const MANIFEST = join(vendorDir, "vendored.json");
+const BUNDLED_SKILLS = readdirSync(join(ROOT, "skills")).map((n) => SKILL_PREFIX + n);
+const BUNDLED_AGENTS = readdirSync(join(ROOT, "agents")).map((f) => AGENT_PREFIX + f);
+function readManifest() {
+  const m = readJSON(MANIFEST, null);
+  if (!m || typeof m !== "object" || Array.isArray(m)) return null;
+  // 一覧はリポジトリの中のファイルなので、接頭辞つきの名前以外（../ など）は使わない
+  const names = (v, re) => (Array.isArray(v) ? v.filter((x) => typeof x === "string" && re.test(x)) : []);
+  return {
+    skills: names(m.skills, /^ja-proofread-[A-Za-z0-9_-]+$/),
+    agents: names(m.agents, /^ja-proofread-[A-Za-z0-9_.-]+\.md$/),
+    created: m.created && typeof m.created === "object" ? m.created : {},
+  };
+}
+
+// 一覧がない（0.1.2 までの版で同梱した）ときは、同梱するスキルとサブエージェントの名前だけを消す
+function removeVendored(manifest) {
   rmSync(vendorDir, { recursive: true, force: true });
-  for (const sub of ["skills", "agents"]) {
-    const d = join(claudeDir, sub);
-    if (!existsSync(d)) continue;
-    for (const n of readdirSync(d)) if (n.startsWith(sub === "skills" ? SKILL_PREFIX : AGENT_PREFIX)) rmSync(join(d, n), { recursive: true, force: true });
-  }
+  for (const n of manifest?.skills ?? BUNDLED_SKILLS) rmSync(join(claudeDir, "skills", n), { recursive: true, force: true });
+  for (const f of manifest?.agents ?? BUNDLED_AGENTS) rmSync(join(claudeDir, "agents", f), { force: true });
+}
+
+function removeIfEmpty(d) {
+  try { if (existsSync(d) && !readdirSync(d).length) rmdirSync(d); } catch { /* 消せなくても続ける */ }
 }
 
 // 書く前に、同梱のフックが入っていない settings.json を settings.json.bak に残す。
@@ -75,11 +94,34 @@ if (existsSync(settingsPath)) {
   }
 }
 const original = JSON.parse(JSON.stringify(settings));
+const manifest = readManifest();
+const vendoredBefore = existsSync(vendorDir) || hasOurHooks(settings);
+
+if (remove && !vendoredBefore) {
+  console.log("このプロジェクトには ja-proofread が同梱されていません。何も変えていません。");
+  process.exit(0);
+}
+
+// 同梱で作ったもの（初めて同梱したときに無かったもの）。やめるときに、空なら消す
+const created = manifest?.created ?? (vendoredBefore ? {} : {
+  claude: !existsSync(claudeDir),
+  skills: !existsSync(join(claudeDir, "skills")),
+  agents: !existsSync(join(claudeDir, "agents")),
+  settings: !existsSync(settingsPath),
+});
 removeHooks(settings);
-removeVendored();
+removeVendored(manifest);
 
 if (remove) {
-  if (existsSync(settingsPath)) writeSettings(settings, original);
+  if (existsSync(settingsPath)) {
+    // 同梱で作った settings.json が空（{}）に戻ったら、ファイルごと消す。
+    // 一覧のない古い版の同梱では、.bak がないこと（書く前に無かったこと）で見分ける
+    const madeByUs = created.settings ?? (manifest === null && !existsSync(settingsPath + ".bak"));
+    if (madeByUs && !Object.keys(settings).length) rmSync(settingsPath, { force: true });
+    else writeSettings(settings, original);
+  }
+  for (const sub of ["skills", "agents"]) if (created[sub] || manifest === null) removeIfEmpty(join(claudeDir, sub));
+  if (created.claude) removeIfEmpty(claudeDir);
   const bak = existsSync(settingsPath + ".bak") ? "同梱する前の settings.json は settings.json.bak にあります（同梱のフックが入る前の、最後の状態です）" : "settings.json.bak はありません";
   console.log(`同梱をやめました（.ja-proofread.json は残しています。${bak}）`);
   process.exit(0);
@@ -91,6 +133,8 @@ for (const d of ["scripts", "rules", "config", "data", "templates", ".claude-plu
   cpSync(join(ROOT, d), join(vendorDir, d), { recursive: true });
 }
 for (const f of ["package.json", "package-lock.json"]) if (existsSync(join(ROOT, f))) cpSync(join(ROOT, f), join(vendorDir, f));
+
+const vendored = { skills: [], agents: [] };
 
 // 2. スキル（名前に接頭辞をつけ、プラグイン用の変数を同梱先の場所に置き換える）
 //    ${CLAUDE_PLUGIN_ROOT} と ${CLAUDE_PLUGIN_DATA} はプラグインのスキルでしか置き換わらない。
@@ -114,11 +158,15 @@ for (const name of readdirSync(join(ROOT, "skills"))) {
   const dir = join(claudeDir, "skills", SKILL_PREFIX + name);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "SKILL.md"), out);
+  vendored.skills.push(SKILL_PREFIX + name);
 }
 
 // 3. サブエージェント（ファイル名だけ接頭辞。呼び出し名はプラグインと同じ）
 mkdirSync(join(claudeDir, "agents"), { recursive: true });
-for (const f of readdirSync(join(ROOT, "agents"))) cpSync(join(ROOT, "agents", f), join(claudeDir, "agents", AGENT_PREFIX + f));
+for (const f of readdirSync(join(ROOT, "agents"))) {
+  cpSync(join(ROOT, "agents", f), join(claudeDir, "agents", AGENT_PREFIX + f));
+  vendored.agents.push(AGENT_PREFIX + f);
+}
 
 // 4. フック
 const cmd = (s, extra = "") => `node "$CLAUDE_PROJECT_DIR/${MARK}${s}"${extra}`;
@@ -126,6 +174,7 @@ settings.hooks = settings.hooks || {};
 (settings.hooks.SessionStart ||= []).push({ matcher: "startup|resume", hooks: [{ type: "command", command: cmd("ensure-deps.mjs", " --quiet"), timeout: 300 }] });
 (settings.hooks.PostToolUse ||= []).push({ matcher: "Write|Edit|MultiEdit", hooks: [{ type: "command", command: cmd("hook-post-edit.mjs"), timeout: 60 }] });
 writeSettings(settings, original);
+writeFileSync(MANIFEST, JSON.stringify({ version: readJSON(join(ROOT, ".claude-plugin", "plugin.json")).version, ...vendored, created }, null, 2) + "\n");
 
 // 5. プロジェクトの設定（無いときだけ作る。フックはこのファイルがあるときだけ動く）
 const cfgPath = join(target, ".ja-proofread.json");

@@ -1,17 +1,130 @@
 // 文書全体を見て数える構成チェック。textlint の1か所ずつの検出では拾えない型を扱う
 // 依存なし（Node 標準のみ）
 
-// コードブロックとインラインコードを空白に置き換え、行番号と文字の位置は保つ（HTMLコメントは残す）
-export function maskCode(text) {
-  let t = text.replace(/^(```|~~~)[^\n]*\n[\s\S]*?^\1[^\n]*$/gm, (m) => m.replace(/[^\n]/g, " "));
-  t = t.replace(/`[^`\n]*`/g, (m) => " ".repeat(m.length));
-  return t;
+// コードの範囲（文字の位置の [始め, 終わり)）を探す。
+// 依存（@textlint/markdown-to-ast）があれば lib.mjs が構文木で探す関数を渡す。無ければ下の codeRangesByRegex で探す
+let markdownParse = null;
+export function useMarkdownParser(parse) {
+  markdownParse = typeof parse === "function" ? parse : null;
+  lastRanges = { text: null, ranges: [] };
 }
 
-// コードブロック・インラインコード・URL・HTMLコメントを空白に置き換え、行番号は保つ
-export function maskNonProse(text) {
-  let t = text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " "));
-  t = maskCode(t);
+let lastRanges = { text: null, ranges: [] };
+export function codeRanges(text) {
+  if (lastRanges.text === text) return lastRanges.ranges;
+  let ranges = null;
+  if (markdownParse) {
+    try {
+      const found = [];
+      const walk = (n) => {
+        if (!n || typeof n !== "object") return;
+        if ((n.type === "CodeBlock" || n.type === "Code") && Array.isArray(n.range)) { found.push([n.range[0], n.range[1]]); return; }
+        for (const c of n.children || []) walk(c);
+      };
+      walk(markdownParse(text));
+      ranges = found;
+    } catch { ranges = null; }
+  }
+  if (!ranges) ranges = codeRangesByRegex(text);
+  lastRanges = { text, ranges };
+  return ranges;
+}
+
+// 依存が無いときのコードの範囲。CommonMark のおもな形だけを扱う：
+//   フェンス（``` か ~~~ を3つ以上。0〜3字下げ、または箇条書きの中なら字下げは問わない）。閉じは開きと同じ文字で同じ長さ以上。閉じなければ文末まで
+//   4字下げのコードブロック（前が空行か文書の始めで、箇条書きの中でないとき）
+//   インラインコード（同じ数のバッククォートで閉じる。``…`` も。空行はまたがない）
+export function codeRangesByRegex(text) {
+  const ranges = [];
+  const indentOf = (l) => { let n = 0; for (const c of l) { if (c === " ") n++; else if (c === "\t") n += 4 - (n % 4); else break; } return n; };
+  const blankLine = (l) => /^[ \t]*$/.test(l);
+  const listItem = /^[ \t]*(?:[-*+]|\d+[.)])[ \t]+/;
+  let pos = 0, fence = null, indented = null, inList = false, prevBlank = true;
+  for (const l of text.split("\n")) {
+    const s = pos, e = pos + l.length;
+    pos = e + 1;
+    if (fence) {
+      const m = /^[ \t]*(`{3,}|~{3,})[ \t]*$/.exec(l);
+      if (m && m[1][0] === fence.ch && m[1].length >= fence.len) { ranges.push([fence.start, e]); fence = null; prevBlank = false; }
+      continue;
+    }
+    if (indented) {
+      if (blankLine(l)) continue;
+      if (indentOf(l) >= 4) { indented.end = e; continue; }
+      ranges.push([indented.start, indented.end]);
+      indented = null;
+    }
+    const ind = indentOf(l);
+    const marker = listItem.exec(l);
+    const rest = marker ? l.slice(marker[0].length) : l.replace(/^[ \t]*/, "");
+    const fm = /^(`{3,}|~{3,})(.*)$/.exec(rest);
+    if (fm && (ind <= 3 || inList || marker) && !(fm[1][0] === "`" && fm[2].includes("`"))) {
+      fence = { ch: fm[1][0], len: fm[1].length, start: s };
+      if (marker) inList = true;
+      prevBlank = false;
+      continue;
+    }
+    if (blankLine(l)) { prevBlank = true; continue; }
+    if (ind >= 4 && prevBlank && !inList) { indented = { start: s, end: e }; prevBlank = false; continue; }
+    if (marker) inList = true;
+    else if (ind === 0 && (prevBlank || /^#{1,6}\s/.test(l))) inList = false;
+    prevBlank = false;
+  }
+  if (fence) ranges.push([fence.start, text.length]);
+  if (indented) ranges.push([indented.start, indented.end]);
+
+  // インラインコード。ブロックの中は見ない
+  const t = blankOut(text, ranges);
+  const paraStarts = [0];
+  for (const m of t.matchAll(/\n[ \t]*\n/g)) paraStarts.push(m.index + m[0].length);
+  const paraOf = (i) => { let lo = 0, hi = paraStarts.length - 1; while (lo < hi) { const mid = (lo + hi + 1) >> 1; if (paraStarts[mid] <= i) lo = mid; else hi = mid - 1; } return lo; };
+  const runs = [];
+  for (const m of t.matchAll(/`+/g)) {
+    let i = m.index, n = m[0].length;
+    if (t[i - 1] === "\\") { i++; n--; } // \` は文字のバッククォート
+    if (n > 0) runs.push({ i, n, p: paraOf(i) });
+  }
+  // 各 run について、同じ段落で次に来る同じ長さの run
+  const next = new Array(runs.length).fill(-1);
+  const seen = new Map();
+  for (let k = runs.length - 1; k >= 0; k--) {
+    const key = `${runs[k].p}|${runs[k].n}`;
+    if (seen.has(key)) next[k] = seen.get(key);
+    seen.set(key, k);
+  }
+  for (let k = 0; k < runs.length;) {
+    const j = next[k];
+    if (j === -1) { k++; continue; }
+    ranges.push([runs[k].i, runs[j].i + runs[j].n]);
+    k = j + 1;
+  }
+  return ranges.sort((a, b) => a[0] - b[0]);
+}
+
+// 範囲の中の文字を空白にする（改行は残すので、行番号と文字の位置は変わらない）
+function blankOut(text, ranges) {
+  if (!ranges.length) return text;
+  const sorted = [...ranges].sort((a, b) => a[0] - b[0]);
+  let out = "", at = 0;
+  for (const [s0, e0] of sorted) {
+    const s = Math.max(s0, at), e = Math.min(e0, text.length);
+    if (e <= s) continue;
+    out += text.slice(at, s) + text.slice(s, e).replace(/[^\n]/g, " ");
+    at = e;
+  }
+  return out + text.slice(at);
+}
+
+// コードブロックとインラインコードを空白に置き換え、行番号と文字の位置は保つ（HTMLコメントは残す）
+export function maskCode(text, ranges = codeRanges(text)) {
+  return blankOut(text, ranges);
+}
+
+// コードブロック・インラインコード・HTMLコメント・URL を空白に置き換え、行番号は保つ。
+// ranges は元の文書から取ったコードの範囲（位置は変わらないので、一部を空白にした文書にも使える）
+export function maskNonProse(text, ranges = codeRanges(text)) {
+  let t = maskCode(text, ranges);
+  t = t.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " "));
   t = t.replace(/https?:\/\/\S+/g, (m) => " ".repeat(m.length));
   return t;
 }
@@ -37,10 +150,10 @@ function lineOf(text, index) {
 // ルール名つき（<!-- textlint-disable P001,P008 -->）なら、そのルールだけを外す。enable がなければ文末まで。
 // コードブロックやインラインコードの中に書いた textlint-disable は、説明の文字なので数えない
 const DISABLE_RE = /<!--\s*textlint-(disable|enable)\b([^>]*?)-->/g;
-export function disabledRanges(text) {
+export function disabledRanges(text, code = codeRanges(text)) {
   const ranges = [];
   const open = [];
-  for (const m of maskCode(text).matchAll(DISABLE_RE)) {
+  for (const m of maskCode(text, code).matchAll(DISABLE_RE)) {
     const rules = m[2].split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
     const line = lineOf(text, m.index);
     if (m[1] === "disable") open.push({ from: line, start: m.index, rules });
@@ -211,18 +324,19 @@ export function stats(text) {
 
 export function runStructureChecks(text, ledger, profile = "doc") {
   // textlint-disable の範囲は、件数と構成のチェックからも外す（範囲を空白にして行番号は保つ）
-  const ranges = disabledRanges(text);
+  const code = codeRanges(text);
+  const ranges = disabledRanges(text, code);
   const all = ranges.filter((r) => !r.rules.length);
   const named = ranges.filter((r) => r.rules.length);
   const base = blank(text, all);
-  const maskedAll = maskNonProse(base);
+  const maskedAll = maskNonProse(base, code);
   const len = Math.max(proseLength(maskedAll), 1);
   const out = [];
   for (const p of ledger.patterns) {
     if (p.status !== "active") continue;
     if (p.profiles && !p.profiles.includes(profile)) continue;
     const mine = named.filter((r) => r.rules.includes(p.id));
-    const masked = mine.length ? maskNonProse(blank(base, mine)) : maskedAll;
+    const masked = mine.length ? maskNonProse(blank(base, mine), code) : maskedAll;
     const t = p.detect?.type;
     if (t === "regex-count") {
       const re = new RegExp(p.detect.pattern, (p.detect.flags || "").replace("g", "") + "g");
