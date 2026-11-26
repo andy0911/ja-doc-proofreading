@@ -1,5 +1,14 @@
 # 変更履歴
 
+## 0.1.16（2026-11-26）
+- 同梱の一式 `dist/ja-proofread-setup.mjs` の sha256：`06e7749ea4251eb8237c3bbcc814292f7bd1d08f6c83218ecea68ab82e275660`
+- claude.ai のスキル `dist/claude-ai/ja-proofread-skill.zip` の sha256：`5f2472074a5b313f26cc2a202e8c6301e6475fba79758738f9e9809ec9aaed70`
+- 0.1.15 の確認での指摘を直した。台帳の型は変えていない（台帳の版は plugin.json とそろえて 0.1.16 にした）。
+- claude.ai のスキル：SKILL.md の最初の手順（スキルのフォルダを `D` に決める）を直した。0.1.15 は `find / | head -1` で、ほかの `*/ja-proofread/skill.json`（偽物）を拾うことがあり、1回に十数秒〜1分かかった。これからは、`${CLAUDE_SKILL_DIR}` が置き換わっていればそれを使い（find は動かさない）、空なら決まった候補（`/mnt/skills/*/ja-proofread` など）を見て、無いときだけ find（`/proc`・`/sys`・`/dev` は見ない）で探す。候補にするのは、`skill.json` の name が `ja-proofread-claude-ai` で、version がこの版のものだけ。候補が2つ以上なら止めて、どれを使うか本人に尋ねる。一度決めた D は同じ会話で使い回す、と書いた。
+- `lib.mjs`：一時ディレクトリの退避先 `ja-proofread-cache-<uid>` を、ほかの利用者に先に作られたときは、予備の名前（`-<uid>-1`〜`-9`）を同じ条件で順に試す（別のプロセスも同じ場所を見つけられるように）。0.1.15 は実行のたびに mkdtemp で新しい置き場を作って依存を入れ直し、作ったものが残り続けた。どれも使えないときだけ mkdtemp で作り、一度だけ標準エラーで知らせ、終わりに消す。
+- `ensure-deps.mjs`：npm の `--cache` は、置き場が一時ディレクトリのときと、npm のキャッシュ（`npm config get cache` の場所）に書けないときだけ付ける（本人の `npm_config_cache` や `.npmrc` を上書きしないように）。
+- 文書：install-claude-ai.md の貼る部分の字数を、実際の字数（約710字）に合わせた。
+
 ## 0.1.15（2026-11-26）
 - 同梱の一式 `dist/ja-proofread-setup.mjs` の sha256：`d78f40ae3f9321ae7b2314a9832dc37dbedc788aa01042bb9cd30d7f0eca23bb`
 - claude.ai のスキル `dist/claude-ai/ja-proofread-skill.zip` の sha256：`043a994eff68b32f4920878587c70eb21c52a7acf347a50ad259c58458def8b8`

@@ -26,8 +26,9 @@ function writableDir(d) {
   try { mkdirSync(d, { recursive: true }); accessSync(d, fsConstants.W_OK); return true; } catch { return false; }
 }
 // 一時ディレクトリの下の退避先は、ほかの利用者が先に作って依存（コード）を置けるので、名前に uid を入れ、
-// 自分が持ち主で、シンボリックリンクでなく、権限が 0700 のときだけ使う。合わなければ、このプロセスだけの場所を mkdtemp で作る
-// mkdtemp で作った場所は、子プロセス（textlint の実行など）にも同じものを使わせるため、環境変数で渡す（渡された場所も同じ条件で確かめる）
+// 自分が持ち主で、シンボリックリンクでなく、権限が 0700 のときだけ使う
+// 退避先は、決まった名前（ja-proofread-cache-<uid>、だめなら -<uid>-1〜-9）を、同じ条件で順に試す（別のプロセスも同じ場所を見つけられるように）。
+// どれも使えないときだけ mkdtemp で作り、一度だけ標準エラーで知らせ、終わりに消す。子プロセス（textlint の実行など）には環境変数で渡す
 let privateTmp = "";
 const PRIVATE_TMP_ENV = "JA_PROOFREAD_PRIVATE_TMP";
 function ownPrivateDir(d, uid) {
@@ -39,16 +40,21 @@ function ownPrivateDir(d, uid) {
 export function tmpCacheDir() {
   if (privateTmp) return privateTmp;
   const uid = typeof process.getuid === "function" ? process.getuid() : null;
-  const d = join(tmpdir(), `ja-proofread-cache-${uid ?? "user"}`);
-  try { mkdirSync(d, { mode: 0o700 }); } catch { /* もうある（下で確かめる）か、作れない */ }
-  if (ownPrivateDir(d, uid)) return (privateTmp = d);
+  const base = join(tmpdir(), `ja-proofread-cache-${uid ?? "user"}`);
+  for (const d of [base, ...Array.from({ length: 9 }, (_, i) => `${base}-${i + 1}`)]) {
+    try { mkdirSync(d, { mode: 0o700 }); } catch { /* もうある（下で確かめる）か、作れない */ }
+    if (ownPrivateDir(d, uid)) return (privateTmp = d);
+  }
   const given = process.env[PRIVATE_TMP_ENV];
   if (given && dirname(given) === tmpdir() && /^ja-proofread-cache-/.test(given.slice(tmpdir().length + 1)) && ownPrivateDir(given, uid)) return (privateTmp = given);
-  privateTmp = mkdtempSync(join(tmpdir(), "ja-proofread-cache-"));
-  try { chmodSync(privateTmp, 0o700); } catch { /* mkdtemp は 0700 で作る */ }
-  process.env[PRIVATE_TMP_ENV] = privateTmp;
-  return privateTmp;
+  const made = mkdtempSync(join(tmpdir(), "ja-proofread-cache-"));
+  try { chmodSync(made, 0o700); } catch { /* mkdtemp は 0700 で作る */ }
+  process.stderr.write(`ja-proofread: ${base} と -1〜-9 は、ほかの利用者のものか権限が合わないため使いませんでした。この実行だけの置き場（${made}）を使い、終わりに消します（依存は入れ直しになります）\n`);
+  process.env[PRIVATE_TMP_ENV] = made;
+  process.on("exit", () => { try { rmSync(made, { recursive: true, force: true }); } catch { /* 消せなくても続ける */ } });
+  return (privateTmp = made);
 }
+export const usesTmpCache = () => !!privateTmp;
 const defaultCache = () => {
   const d = join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "ja-proofread");
   return writableDir(d) ? d : tmpCacheDir();

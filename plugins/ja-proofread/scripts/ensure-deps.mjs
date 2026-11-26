@@ -4,10 +4,10 @@
 //   --quiet  フックから呼ぶとき。成功しても何も出さず、失敗したときだけ Claude と利用者に知らせる JSON を出す
 //   --force  入れるのに失敗したばかりでも、待たずにもう一度試す
 // 入れるのに失敗したら、依存の置き場に印（.failed）を書き、10分は試さない（校正のたびに npm を待たせないため）
-import { copyFileSync, writeFileSync, existsSync, mkdirSync, rmSync, statSync, openSync, closeSync, readFileSync } from "node:fs";
-import { join, dirname } from "node:path";
+import { copyFileSync, writeFileSync, existsSync, mkdirSync, rmSync, statSync, openSync, closeSync, readFileSync, accessSync, constants as fsConstants } from "node:fs";
+import { join, dirname, isAbsolute } from "node:path";
 import { spawnSync } from "node:child_process";
-import { ROOT, depsDir, depsHash, depsReady } from "./lib.mjs";
+import { ROOT, depsDir, depsHash, depsReady, usesTmpCache } from "./lib.mjs";
 
 const quiet = process.argv.includes("--quiet");
 const force = process.argv.includes("--force");
@@ -69,6 +69,14 @@ function takeLock() {
   return false;
 }
 
+function needOwnCache(npm) {
+  if (usesTmpCache()) return true;
+  const r = spawnSync(npm, ["config", "get", "cache"], { cwd: dir, encoding: "utf8", shell: process.platform === "win32", timeout: 20000 });
+  const c = (r.stdout || "").trim();
+  if (r.status !== 0 || !c || !isAbsolute(c)) return true;
+  try { mkdirSync(c, { recursive: true }); accessSync(c, fsConstants.W_OK); return false; } catch { return true; }
+}
+
 if (!takeLock()) { log("ja-proofread: 別の処理が依存を入れています"); process.exit(0); }
 try {
   copyFileSync(join(ROOT, "package.json"), join(dir, "package.json"));
@@ -77,8 +85,10 @@ try {
   log("ja-proofread: textlint とルールを入れています（初回のみ、30秒ほど）");
   const npm = process.platform === "win32" ? "npm.cmd" : "npm";
   // ロックファイルの版をそのまま入れる。パッケージのインストールスクリプトは動かさない
-  // npm のキャッシュは依存の置き場の隣に置く（HOME に書けないと ~/.npm が作れず、入れられないため）
-  const common = ["--cache", join(dirname(dir), "npm-cache"), "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error", "--fetch-retries=1", "--fetch-timeout=20000", "--update-notifier=false"];
+  // npm のキャッシュは、置き場が一時ディレクトリのときと、npm のキャッシュ（npm_config_cache・.npmrc・既定の ~/.npm）に書けないときだけ、
+  // 依存の置き場の隣に置く（HOME に書けないと ~/.npm が作れず、入れられないため）。本人の設定は、書けるなら上書きしない
+  const cacheArgs = needOwnCache(npm) ? ["--cache", join(dirname(dir), "npm-cache")] : [];
+  const common = [...cacheArgs, "--omit=dev", "--ignore-scripts", "--no-audit", "--no-fund", "--loglevel=error", "--fetch-retries=1", "--fetch-timeout=20000", "--update-notifier=false"];
   const r = spawnSync(npm, [hasLock ? "ci" : "install", ...common], { cwd: dir, encoding: "utf8", shell: process.platform === "win32", timeout: 280000, killSignal: "SIGKILL" });
   if (r.error || r.status !== 0) {
     const errLines = (r.stderr || "").split("\n").filter((l) => /^npm (error|ERR!)/.test(l) && !/complete log/.test(l));

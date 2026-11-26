@@ -47,9 +47,18 @@ function tracked() {
   return files.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
-// SKILL.md（スキルの入口）。claude.ai のチャットで ${CLAUDE_SKILL_DIR} が置き換わるかは分からないので、
-// 最初の手順でスキルのフォルダを D に決め（置き換わらなければ、シェルの変数として空になるので、印の skill.json を探す）、そのあとのコマンドは $D を使う
-const FIND_D = `D="\${CLAUDE_SKILL_DIR}"; [ -f "$D/scripts/proofread.mjs" ] || D="$(dirname "$(find / -path '*/ja-proofread/skill.json' -not -path '/proc/*' 2>/dev/null | head -1)")"; [ -f "$D/scripts/proofread.mjs" ] && echo "D=$D" && node -v`;
+// SKILL.md（スキルの入口）。claude.ai のチャットで ${CLAUDE_SKILL_DIR} が置き換わるかは分からないので、最初の手順でスキルのフォルダを D に決める。
+// 置き換わっていればそれを使う（find は動かさない）。空なら、決まった候補を見て、無いときだけ find（/proc・/sys・/dev は見ない）で探す。
+// 候補にするのは、印の skill.json の name が ja-proofread-claude-ai で、version がこの版のものだけ。候補が2つ以上なら止めて、本人に尋ねる
+const findD = (v) => `V="${v}"; D="\${CLAUDE_SKILL_DIR}"
+ok() { [ -f "$1/scripts/proofread.mjs" ] && grep -q '"name": "ja-proofread-claude-ai"' "$1/skill.json" 2>/dev/null && grep -q "\\"version\\": \\"$V\\"" "$1/skill.json"; }
+if [ -z "$D" ]; then
+  C=$(for d in /mnt/skills/*/ja-proofread /mnt/skills/ja-proofread "$HOME/.claude/skills/ja-proofread"; do ok "$d" && (cd "$d" && pwd -P); done | sort -u)
+  [ -n "$C" ] || C=$(find / \\( -path /proc -o -path /sys -o -path /dev \\) -prune -o -path '*/ja-proofread/skill.json' -print 2>/dev/null | while read -r f; do d=$(dirname "$f"); ok "$d" && (cd "$d" && pwd -P); done | sort -u)
+  N=$(printf '%s\\n' "$C" | grep -c .)
+  if [ "$N" -eq 1 ]; then D="$C"; elif [ "$N" -gt 1 ]; then echo "ja-proofread のスキルのフォルダの候補が $N 件です:"; printf '%s\\n' "$C"; fi
+fi
+if [ -n "$D" ] && ok "$D"; then echo "D=$D"; node -v; else echo "ja-proofread（v$V）のスキルのフォルダを決められませんでした"; fi`;
 function skillMd(v) {
   return `---
 name: ${SKILL_NAME}
@@ -64,9 +73,12 @@ description: プロジェクトの指示で日本語の文書の校正を頼ま�
 
 1. スキルのフォルダを決め、Node が動くか確かめます。次を、そのまま実行します。
    \`\`\`bash
-   ${FIND_D}
+${findD(v).split("\n").map((l) => "   " + l).join("\n")}
    \`\`\`
-   \`D=…\` の行が出たら、そのパスがスキルのフォルダです。下のコマンドの \`${DIR}\` は、毎回、先頭に \`D="<そのパス>";\` を付けて実行します（コマンドごとにシェルが変わっても動くように）。\`D=…\` の行が出ないときは、スキルのフォルダが見つからないので、校正したことにせず、校正できなかったと伝えます。\`node -v\` が失敗したときは、下の「コード実行や Node が使えないとき」に従います。
+   \`D=…\` の行が出たら、そのパスがスキルのフォルダです。一度決めた D は、同じ会話の中で使い回し、1をもう一度実行しません。下のコマンドの \`${DIR}\` は、毎回、先頭に \`D="<そのパス>";\` を付けて実行します（コマンドごとにシェルが変わっても動くように）。
+   - 「候補が N 件です」と出たら（2件以上）、どれも使わずに止め、表示されたパスを本人に見せて、どれを使うか尋ねます。
+   - 「決められませんでした」と出たら、スキルが見つからないので、校正したことにせず、校正できなかったと伝えます。
+   - \`node -v\` が失敗したときは、下の「コード実行や Node が使えないとき」に従います。
 2. 書いた文書を、作業用のファイル（例：\`/tmp/ja-proofread-work/文書.md\`）に Markdown で保存します。アーティファクトや返答で渡す文書は、その本文を保存します。スライドは、1枚を \`## 番号 見出し\` の節にして書き出します。
 3. 依存を入れてから校正します。依存は会話の最初だけ数十秒かかります。スライドや体言止めの多い資料は、\`--profile slide\` をファイルの前に付けます。
    \`\`\`bash

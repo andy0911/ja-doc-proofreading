@@ -1,7 +1,7 @@
 // 動作確認。node tests/run.mjs （依存は先に scripts/ensure-deps.mjs で入れる）
 // 利用者の記録を汚さないよう、データ置き場は一時ディレクトリにする（依存だけは入れたものをリンクして使う）
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, cpSync, mkdirSync, symlinkSync, statSync, rmSync, readdirSync, lstatSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, cpSync, mkdirSync, symlinkSync, statSync, rmSync, readdirSync, lstatSync, realpathSync } from "node:fs";
 import { join, resolve, dirname, basename, relative } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -1178,7 +1178,7 @@ ok("同梱したスキルに、プラグインのデータ置き場の説明が�
   const readerTest = text("ja-proofread/templates/reader-test.md");
   ok("役の指示に Claude Code 向けの frontmatter（tools: など）が残らず、templates/reader-test.md はサブエージェントを起動する文をチャット向けに書き直してある", agentsText.length > 0 && !/^---$/m.test(agentsText) && !/^tools:/m.test(agentsText) && /1人ずつ順に行います/.test(readerTest) && !/サブエージェントとして起動|ja-proofread:/.test(readerTest));
   // SKILL.md の最初の手順（スキルのフォルダを D に決める）が、${CLAUDE_SKILL_DIR} が置き換わらないときも、置き換わったときも、スキルのフォルダを見つける
-  const findLine = (skill.match(/^ {3}(D="\$\{CLAUDE_SKILL_DIR\}";[^\n]*)$/m) || [])[1] || "";
+  const findBlock = ((skill.split("1. スキルのフォルダを決め")[1] || "").match(/```bash\n([\s\S]*?)\n {3}```/) || [])[1]?.split("\n").map((l) => l.replace(/^ {3}/, "")).join("\n") || "";
   // （下で展開したフォルダで試す）
   // PROJECT-INSTRUCTIONS.md
   const piText = readFileSync(join(CAI, "PROJECT-INSTRUCTIONS.md"), "utf8");
@@ -1190,11 +1190,32 @@ ok("同梱したスキルに、プラグインのデータ置き場の説明が�
   for (const e of ents) { const p = join(ex, e.name); if (e.name.endsWith("/")) mkdirSync(p, { recursive: true }); else { mkdirSync(dirname(p), { recursive: true }); writeFileSync(p, e.data); } }
   const sdir = join(ex, "ja-proofread");
   const listing = (d) => { const out = []; const walk = (x) => { for (const n of readdirSync(x).sort()) { const p = join(x, n); const st = lstatSync(p); out.push(relative(d, p) + "\0" + st.size + "\0" + st.mtimeMs); if (st.isDirectory()) walk(p); } }; walk(d); return out.join("\n"); };
-  // find / は時間がかかるので、探す根を展開した場所にして試す
-  const fl1 = spawnSync("bash", ["-c", findLine.replace("find / ", `find "${ex}" `)], { encoding: "utf8", env: { ...BASE_ENV, CLAUDE_SKILL_DIR: "" } });
-  const fl2 = spawnSync("bash", ["-c", findLine.replace("${CLAUDE_SKILL_DIR}", sdir)], { encoding: "utf8", env: BASE_ENV });
-  const foundD = (fl1.stdout.match(/^D=(.*)$/m) || [])[1] || "";
-  ok("SKILL.md の最初の手順は、${CLAUDE_SKILL_DIR} が置き換わらなくても（印の skill.json を探して）、置き換わっても、スキルのフォルダを D に決め、node -v を出す", !!findLine && existsSync(join(foundD, "scripts/proofread.mjs")) && existsSync(join(foundD, "skill.json")) && /^v\d+/m.test(fl1.stdout) && fl2.stdout.includes(`D=${sdir}\n`), findLine + " / " + fl1.stdout + fl1.stderr + " / " + fl2.stdout);
+  // find / は時間がかかるので、探す根を展開した場所にして試す。find が動いたかは、PATH の前に置いた find の写しが印を残すかで見る
+  const fbin = tmp("jp-caifindbin-"), fmark = join(fbin, "find-ran");
+  write(fbin, "find", `#!/bin/sh\ntouch "${fmark}"\nexec /usr/bin/env -i PATH=/usr/bin:/bin find "$@"\n`);
+  spawnSync("chmod", ["+x", join(fbin, "find")]);
+  const fhomeD = tmp("jp-caifindhome-");
+  const runFind = (code, env = {}) => { rmSync(fmark, { force: true }); const x = spawnSync("bash", ["-c", code], { encoding: "utf8", env: { ...BASE_ENV, PATH: `${fbin}:${process.env.PATH}`, HOME: fhomeD, CLAUDE_SKILL_DIR: "", ...env } }); return { out: x.stdout + x.stderr, found: (x.stdout.match(/^D=(.*)$/m) || [])[1] || "", ran: existsSync(fmark) }; };
+  const realSdir = realpathSync(sdir);
+  const inEx = findBlock.replace("find / ", `find "${ex}" `);
+  // 置き換わったとき：find は動かない
+  const f1 = runFind(findBlock.replace("${CLAUDE_SKILL_DIR}", sdir));
+  // 偽物（name が違う・版が違う）を置いても、本物が選ばれる
+  const vNow = json(readFileSync(join(ROOT, ".claude-plugin/plugin.json"), "utf8")).version;
+  write(ex, "fake1/ja-proofread/skill.json", JSON.stringify({ name: "evil", version: vNow }, null, 2)); write(ex, "fake1/ja-proofread/scripts/proofread.mjs", "");
+  write(ex, "fake2/ja-proofread/skill.json", JSON.stringify({ name: "ja-proofread-claude-ai", version: "0.0.1" }, null, 2)); write(ex, "fake2/ja-proofread/scripts/proofread.mjs", "");
+  const f2 = runFind(inEx);
+  // 決まった候補（~/.claude/skills/ja-proofread）にあれば、find は動かない
+  mkdirSync(join(fhomeD, ".claude/skills"), { recursive: true }); symlinkSync(sdir, join(fhomeD, ".claude/skills/ja-proofread"));
+  const f3 = runFind(inEx);
+  rmSync(join(fhomeD, ".claude"), { recursive: true });
+  // 本物と同じ印の写しがもう1つあれば、止めて候補を示す
+  write(ex, "copy/ja-proofread/skill.json", readFileSync(join(sdir, "skill.json"), "utf8")); write(ex, "copy/ja-proofread/scripts/proofread.mjs", "");
+  const f4 = runFind(inEx);
+  for (const d of ["fake1", "fake2", "copy"]) rmSync(join(ex, d), { recursive: true });
+  ok("SKILL.md の最初の手順：${CLAUDE_SKILL_DIR} が置き換わっていれば find を動かさずにそれを使い、node -v を出す", !!findBlock && f1.found === sdir && !f1.ran && /^v\d+/m.test(f1.out), findBlock.slice(0, 80) + " / " + f1.out);
+  ok("SKILL.md の最初の手順：置き換わらないとき、name か版の違う偽物の skill.json を置いても本物を選ぶ。決まった候補にあれば find を動かさない", f2.found === realSdir && f2.ran && f3.found === realSdir && !f3.ran, f2.out + " / " + f3.out);
+  ok("SKILL.md の最初の手順：本物と同じ印の候補が2つあれば、D を決めずに候補を示して止める", f4.found === "" && /候補が 2 件です/.test(f4.out) && !/^D=/m.test(f4.out), f4.out);
   spawnSync("chmod", ["-R", "a-w", sdir]);
   const before3 = listing(sdir);
   const chome = tmp("jp-caihome-");
@@ -1233,11 +1254,17 @@ ok("同梱したスキルに、プラグインのデータ置き場の説明が�
       cases.push(["ほかの持ち主", t3, p3]);
     }
     const bad = cases.map(([label, t, pw]) => {
-      const x = spawnSync(process.execPath, [join(sdir, "scripts/proofread.mjs"), cdoc], { encoding: "utf8", cwd: WORK, env: { ...fenv, TMPDIR: t } });
-      const own = readdirSync(t).filter((n) => /^ja-proofread-cache-/.test(n) && n !== `ja-proofread-cache-${myUid}`);
-      return x.status === 0 && !existsSync(pw) && own.length === 1 && existsSync(join(t, own[0], "hits.jsonl")) ? "" : `${label}: ${x.status} pwned=${existsSync(pw)} ${own.join(",")} ${x.stderr.slice(0, 120)}`;
+      const runs = [1, 2].map(() => spawnSync(process.execPath, [join(sdir, "scripts/proofread.mjs"), cdoc], { encoding: "utf8", cwd: WORK, env: { ...fenv, TMPDIR: t } }));
+      const names = readdirSync(t).filter((n) => /^ja-proofread-cache-/.test(n)).sort().join(",");
+      return runs.every((x) => x.status === 0) && !existsSync(pw) && names === `ja-proofread-cache-${myUid},ja-proofread-cache-${myUid}-1` && existsSync(join(t, `ja-proofread-cache-${myUid}-1/hits.jsonl`)) && (statSync(join(t, `ja-proofread-cache-${myUid}-1`)).mode & 0o777) === 0o700 ? "" : `${label}: ${runs.map((x) => x.status)} pwned=${existsSync(pw)} ${names} ${runs[0].stderr.slice(0, 120)}`;
     }).filter(Boolean);
-    ok(`退避先の ja-proofread-cache-<uid> が自分だけのものでなければ（${cases.map((c) => c[0]).join("・")}）使わず、置かれた依存のコードを動かさず、mkdtemp で作った場所を使う`, bad.length === 0, bad.join(" | "));
+    ok(`退避先の ja-proofread-cache-<uid> が自分だけのものでなければ（${cases.map((c) => c[0]).join("・")}）使わず、置かれた依存のコードを動かさず、予備の名前の -<uid>-1 を使う（2回動かしても同じ場所で、ほかに作らない）`, bad.length === 0, bad.join(" | "));
+    // 予備の名前もすべて使えなければ、mkdtemp で作った場所を使い、一度だけ知らせ、終わりに消す
+    const t9 = tmp("jp-caiplant9-");
+    for (const n of ["", ...Array.from({ length: 9 }, (_, i) => `-${i + 1}`)]) { const d = join(t9, `ja-proofread-cache-${myUid}${n}`); mkdirSync(d); spawnSync("chmod", ["0777", d]); }
+    const x9 = spawnSync(process.execPath, [join(sdir, "scripts/proofread.mjs"), cdoc], { encoding: "utf8", cwd: WORK, env: { ...fenv, TMPDIR: t9 } });
+    const left9 = readdirSync(t9).filter((n) => /^ja-proofread-cache-/.test(n) && !new RegExp(`^ja-proofread-cache-${myUid}(-\\d)?$`).test(n));
+    ok("予備の名前もすべて使えなければ、mkdtemp で作った場所を使って動き、標準エラーで一度だけ知らせ、終わりに消す", x9.status === 0 && /必ず/.test(x9.stdout) && (x9.stderr.match(/この実行だけの置き場/g) || []).length === 1 && left9.length === 0, x9.stderr.slice(0, 300) + left9.join(","));
   }
   spawnSync("chmod", ["-R", "u+w", ex]);
   // git が追跡していないファイルは入れない。git の外では止める

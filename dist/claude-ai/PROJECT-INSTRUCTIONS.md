@@ -3,7 +3,7 @@
 先に、ja-proofread のスキル（ja-proofread-skill.zip）を Customize > Skills で上げておきます。そのあと、下の「----- 貼る部分ここから（この行は貼らない） -----」と「----- 貼る部分ここまで（この行は貼らない） -----」の2行の間（その2行は除く）を、プロジェクトの指示（Instructions）に足します。スキルを新しい版に上げ直したら、前の版の部分を「（ja-proofread の指示はここまで）」の行まで消してから、新しい版のものを足します。やめるときも、その行まで消します。詳しくは https://github.com/andy0911/ja-doc-proofreading/blob/main/docs/install-claude-ai.md を見てください。
 
 ----- 貼る部分ここから（この行は貼らない） -----
-## 日本語の文書の校正（ja-proofread v0.1.15）
+## 日本語の文書の校正（ja-proofread v0.1.16）
 
 このプロジェクトで日本語の文書を書いたら、ja-proofread スキルで毎回校正してから渡します。
 
