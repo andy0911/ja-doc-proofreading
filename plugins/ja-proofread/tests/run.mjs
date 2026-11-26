@@ -2,7 +2,7 @@
 // 利用者の記録を汚さないよう、データ置き場は一時ディレクトリにする（依存だけは入れたものをリンクして使う）
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, cpSync, mkdirSync, symlinkSync, statSync, rmSync, readdirSync, lstatSync } from "node:fs";
-import { join, resolve, dirname, basename } from "node:path";
+import { join, resolve, dirname, basename, relative } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
@@ -266,6 +266,12 @@ if (existsSync(join(ROOT, "node_modules", "textlint"))) {
   const so = json(r.stdout);
   ok("依存を入れられないと additionalContext と systemMessage で知らせる", r.status === 0 && /入れられませんでした/.test(so.hookSpecificOutput?.additionalContext || "") && so.hookSpecificOutput?.hookEventName === "SessionStart" && /入れられませんでした/.test(so.systemMessage || ""), r.stdout.slice(0, 300) + r.stderr.slice(0, 300));
   ok("失敗してもロックを残さない", !existsSync(join(noDeps, "deps/.lock")));
+  // 失敗したばかりなら、しばらくは試さない（校正のたびに npm を待たせない）。--force なら試す
+  const t0 = Date.now();
+  r = run([S("ensure-deps.mjs")], { env: { JA_PROOFREAD_DATA: noDeps, npm_config_offline: "true", npm_config_cache: tmp("jp-npmcache-") } });
+  ok("依存を入れるのに失敗したばかりなら、しばらくは npm を動かさずに知らせて終える", r.status === 0 && /分は試しません/.test(r.stderr) && !/入れています/.test(r.stderr) && existsSync(join(noDeps, "deps/.failed")) && Date.now() - t0 < 5000, r.stderr.slice(0, 300));
+  r = run([S("ensure-deps.mjs"), "--force"], { env: { JA_PROOFREAD_DATA: noDeps, npm_config_offline: "true", npm_config_cache: tmp("jp-npmcache-") } });
+  ok("--force なら、失敗したばかりでももう一度試す", r.status === 0 && /入れています/.test(r.stderr) && /入れられませんでした/.test(r.stderr), r.stderr.slice(0, 300));
 }
 
 // 16. 測る
@@ -993,19 +999,46 @@ ok("同梱したスキルに、プラグインのデータ置き場の説明が�
   const pf = tmp("jp-kitpf-");
   const kit = join(pf, "ja-proofread-kit");
   const kdata = join(pf, "ja-proofread-data");
+  const BEGIN = "----- 貼る部分ここから（この行は貼らない） -----\n";
+  const END = "\n----- 貼る部分ここまで（この行は貼らない） -----";
+  const pasteOf = (text) => (text.split(BEGIN)[1] || "").split(END)[0];
+  const sumsOk = (dir) => {
+    const pasteHash = /([0-9a-f]{64})  kit\.sha256/.exec(readFileSync(join(dir, "PROJECT-INSTRUCTIONS.md"), "utf8"))?.[1];
+    return spawnSync("bash", ["-c", `cd "${dir}" && echo "${pasteHash}  kit.sha256" | sha256sum -c --quiet - && sha256sum -c --quiet kit.sha256`], { encoding: "utf8" });
+  };
   r = run([DIST, "--project-kit", kit], { env: { GIT_CEILING_DIRECTORIES: pf } });
   const allFiles = (d) => { const out = []; const walk = (x) => { for (const n of readdirSync(x)) { const p = join(x, n); out.push(p); if (statSync(p).isDirectory()) walk(p); } }; walk(d); return out; };
-  ok("--project-kit は git の作業コピーでなくても kit を書く", r.status === 0 && existsSync(join(kit, "kit.json")) && existsSync(join(kit, "PROJECT-INSTRUCTIONS.md")) && existsSync(join(kit, "scripts/proofread.mjs")) && existsSync(join(kit, "rules/ledger-patterns.js")) && existsSync(join(kit, "agents/structure-reviewer.md")) && existsSync(join(kit, "skills/proofread/SKILL.md")), r.stdout.slice(0, 300) + r.stderr);
-  ok("kit に隠しファイルと、kit では使わないスクリプト（同梱・kit・dist・フック）を書かない", safe(() => !allFiles(kit).some((p) => basename(p).startsWith(".")) && ["build-setup.mjs", "install-into-project.mjs", "install-project-kit.mjs", "hook-post-edit.mjs"].every((f) => !existsSync(join(kit, "scripts", f)))));
+  ok("--project-kit は git の作業コピーでなくても kit を書く", r.status === 0 && existsSync(join(kit, "kit.json")) && existsSync(join(kit, "kit.sha256")) && existsSync(join(kit, "PROJECT-INSTRUCTIONS.md")) && existsSync(join(kit, "scripts/proofread.mjs")) && existsSync(join(kit, "rules/ledger-patterns.js")) && existsSync(join(kit, "agents/structure-reviewer.md")) && existsSync(join(kit, "skills/proofread/SKILL.md")), r.stdout.slice(0, 300) + r.stderr);
+  ok("kit に隠しファイル（入れ替えの一時ディレクトリを含む）と、kit では使わないスクリプト（同梱・kit・dist・フック）を書かない", safe(() => !allFiles(kit).some((p) => basename(p).startsWith(".")) && ["build-setup.mjs", "install-into-project.mjs", "install-project-kit.mjs", "hook-post-edit.mjs"].every((f) => !existsSync(join(kit, "scripts", f)))));
   const kj = json(readFileSync(join(kit, "kit.json"), "utf8"));
-  ok("kit.json に版と記録の置き場（kit の隣の ja-proofread-data）がある", kj.name === "ja-proofread-kit" && kj.version === json(readFileSync(join(ROOT, ".claude-plugin/plugin.json"), "utf8")).version && resolve(kit, kj.data) === kdata, JSON.stringify(kj));
+  const kfiles = Object.keys(kj.files || {});
+  ok("kit.json に版と記録の置き場と、書いたファイルの一覧（sha256 つき）がある", kj.name === "ja-proofread-kit" && kj.version === json(readFileSync(join(ROOT, ".claude-plugin/plugin.json"), "utf8")).version && resolve(kit, kj.data) === kdata && kfiles.includes("scripts/proofread.mjs") && kfiles.includes("kit.sha256") && kfiles.includes("PROJECT-INSTRUCTIONS.md") && !kfiles.includes("kit.json") && kfiles.every((f) => /^[0-9a-f]{64}$/.test(kj.files[f])), JSON.stringify(kj).slice(0, 300));
+  r = sumsOk(kit);
+  ok("貼る部分の値で kit.sha256 を、kit.sha256 で kit の中身を照らし合わせられる", r.status === 0, r.stdout + r.stderr);
   const ksk = ["write", "proofread", "grow-ledger"].map((n) => readFileSync(join(kit, "skills", n, "SKILL.md"), "utf8")).join("\n");
   const kpaths = [...ksk.matchAll(new RegExp(kit.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(/[^\\s\"`）)]+)", "g"))].map((m) => kit + m[1]);
   ok("kit の手順の本文に、プラグイン用の変数とプラグインだけの案内が残らず、指すファイルが実在する", !ksk.includes("${CLAUDE_") && !ksk.includes("plugin-only") && !/JA_PROOFREAD_DATA=/.test(ksk) && !/ja-proofread:(structure-reviewer|fresh-eyes-reader)/.test(ksk) && kpaths.length >= 5 && kpaths.every((p) => existsSync(p)), kpaths.filter((p) => !existsSync(p)).join(","));
-  ok("kit の proofread の手順は、サブエージェントを Agent ツールで起動し、kit の agents の本文を渡す", /Agent ツールで起動し、`[^`]*\/agents\/structure-reviewer\.md` の本文/.test(ksk) && /\/agents\/fresh-eyes-reader\.md` の本文/.test(ksk));
+  ok("kit の手順の本文に、kit にないスキルの名前と、Notion への自動の登録が残らない", !/(write|proofread|grow-ledger)`? スキル/.test(ksk) && !/autoRegisterCandidates/.test(ksk), (ksk.match(/.{0,30}(スキル|autoRegister).{0,30}/g) || []).join(" / "));
+  ok("kit の write の「書き終えたら」は、毎回の機械チェックで、仕上げは頼まれたときだけ", /## 4\. 書き終えたら\n\nプロジェクト指示の「書いた・直したら毎回」を行います[^\n]*頼まれたときだけ/.test(ksk));
+  ok("kit の proofread の手順は、サブエージェントを Agent ツールで、読むだけの種類で起動し、kit の agents の本文を渡す", /Agent ツールで、読むだけの種類（Explore など）で起動し、`[^`]*\/agents\/structure-reviewer\.md` の本文/.test(ksk) && /\/agents\/fresh-eyes-reader\.md` の本文/.test(ksk) && /汎用の種類で、ファイルを書き換えないよう頼む/.test(ksk));
+  ok("kit の grow-ledger の「配る」は、kit を新しい版にする1行と貼り直しを書く", ksk.includes(`--project-kit "${kit}"`) && /## E\. 配る（kit を新しい版にする）/.test(ksk));
   const pi = readFileSync(join(kit, "PROJECT-INSTRUCTIONS.md"), "utf8");
-  const paste = (pi.split("<!-- 貼る部分ここから -->\n")[1] || "").split("\n<!-- 貼る部分ここまで -->")[0];
-  ok("PROJECT-INSTRUCTIONS.md の貼る部分は3,000字以下で、毎回の ensure-deps と proofread、手順の本文、記録の置き場を kit の場所で書く", paste.length > 500 && [...paste].length <= 3000 && paste.includes(`node "${kit}/scripts/ensure-deps.mjs"`) && paste.includes(`node "${kit}/scripts/proofread.mjs" <ファイル>`) && ["write", "proofread", "grow-ledger"].every((n) => paste.includes(`${kit}/skills/${n}/SKILL.md`)) && paste.includes(kdata) && /本人が頼んだときだけ/.test(paste) && r.stdout.includes(paste), [...paste].length);
+  const paste = pasteOf(pi);
+  const want = [`(cd "${kit}" && echo "`, `sha256sum -c --quiet kit.sha256) && node "${kit}/scripts/ensure-deps.mjs" && node "${kit}/scripts/proofread.mjs" <ファイル>`, "誤検知と判断したもの以外の「必ず」が0件", "kit が見つからないとき", "読むだけの種類", ".ja-proofread.json", "本人が頼んだときだけ", kdata, ...["write", "proofread", "grow-ledger"].map((n) => `${kit}/skills/${n}/SKILL.md`)];
+  ok("貼る部分は3,000字以下で、照らし合わせてからの ensure-deps と proofread、手順の本文、記録の置き場を kit の場所で書き、終わりの行で終わる", paste.length > 500 && [...paste].length <= 3000 && want.every((w) => paste.includes(w)) && paste.endsWith("（ja-proofread の指示はここまで）") && r.status === 0 && pi.includes("一字も変えずにプロジェクト指示に足して"), [[...paste].length, want.filter((w) => !paste.includes(w))].join(" "));
+  r = run([DIST, "--project-kit", kit]);
+  ok("表示の貼る部分は PROJECT-INSTRUCTIONS.md と同じで、見える区切りの行で囲む", r.status === 0 && pasteOf(r.stdout) === paste, r.stderr);
+  // 改ざんを照らし合わせで見つける
+  const plib = join(kit, "scripts/lib.mjs");
+  const libText = readFileSync(plib, "utf8");
+  writeFileSync(plib, libText + "\n// 書き換え\n");
+  const tam1 = sumsOk(kit);
+  writeFileSync(plib, libText);
+  const sumsText = readFileSync(join(kit, "kit.sha256"), "utf8");
+  writeFileSync(join(kit, "kit.sha256"), sumsText.replace(/^[0-9a-f]{64}  scripts\/lib\.mjs\n/m, ""));
+  const tam2 = sumsOk(kit);
+  writeFileSync(join(kit, "kit.sha256"), sumsText);
+  ok("kit の中の1文字の書き換えも、kit.sha256 の書き換えも、照らし合わせで見つかる", tam1.status !== 0 && /lib\.mjs: FAILED/.test(tam1.stdout) && tam2.status !== 0 && sumsOk(kit).status === 0, tam1.stdout + tam2.stdout);
   // 空の HOME・既定のデータ置き場（環境変数なし）で動く。依存は ~/.cache の下、記録は kit の隣に残る
   const khome = tmp("jp-kithome-");
   mkdirSync(join(khome, ".cache/ja-proofread"), { recursive: true });
@@ -1019,21 +1052,52 @@ ok("同梱したスキルに、プラグインのデータ置き場の説明が�
   ok("kit の ensure-deps と proofread が動き、必ず直す指摘を返し、検出の記録を kit の隣の ja-proofread-data に残す", r.status === 0 && /必ず直す [1-9]/.test(kr.stdout) && existsSync(join(kdata, "hits.jsonl")) && !existsSync(join(kdata, "deps")), kr.stdout.slice(0, 200) + kr.stderr);
   krun([join(kit, "scripts/ledger.mjs"), "fp", "P002", "--text", "x", "--reason", "テスト"]);
   ok("kit で記録した誤検知も ja-proofread-data に残る", existsSync(join(kdata, "false-positives.jsonl")));
-  // 上書き（版の更新）、ほかのファイルは残す、kit でない空でないディレクトリには書かない、--remove
+  ok("記録の置き場は照らし合わせに入らない（記録が増えても照らし合わせは通る）", sumsOk(kit).status === 0 && !readFileSync(join(kit, "kit.sha256"), "utf8").includes("ja-proofread-data"));
+  // 入れ替え：本人のファイル（直下・kit のディレクトリの中）と、書いたあとに変わったファイルは残す。前の版が書いて新しい版に無いものは消す
   write(kit, "mine.txt", "利用者のメモ\n");
-  writeFileSync(join(kit, "scripts/old.mjs"), "// 前の版の残り\n");
+  write(kit, "templates/my-template.md", "本人のテンプレート\n");
+  write(kit, "scripts/old.mjs", "// 前の版が書いたもの\n");
+  write(kit, "data/gone.json", "{}\n");
+  const kj2 = json(readFileSync(join(kit, "kit.json"), "utf8"));
+  kj2.files["scripts/old.mjs"] = createHash("sha256").update("// 前の版が書いたもの\n").digest("hex");
+  kj2.files["data/gone.json"] = createHash("sha256").update("{}\n").digest("hex");
+  writeFileSync(join(kit, "kit.json"), JSON.stringify(kj2));
+  writeFileSync(join(kit, "templates/reader-test.md"), "本人が書き換えた\n");
   r = run([DIST, "--project-kit", kit]);
-  ok("kit をもう一度書くと入れ替え、前の版の残りは消え、利用者のファイルは残る", r.status === 0 && !existsSync(join(kit, "scripts/old.mjs")) && existsSync(join(kit, "mine.txt")) && existsSync(join(kit, "scripts/proofread.mjs")), r.stderr);
-  r = run([DIST, "--project-kit", pf]);
-  ok("kit でない、空でないディレクトリには何も書かずに止める", r.status === 1 && /kit（kit.json）でもない/.test(r.stderr) && !existsSync(join(pf, "kit.json")), r.stderr);
+  const asides = readdirSync(join(kit, "templates")).filter((f) => f.startsWith("reader-test.md.mine-"));
+  ok("入れ替えでは、本人のファイルを残し、書き換えたファイルは別の名前で残し、前の版が書いたものだけを消す", r.status === 0 && existsSync(join(kit, "mine.txt")) && existsSync(join(kit, "templates/my-template.md")) && !existsSync(join(kit, "scripts/old.mjs")) && !existsSync(join(kit, "data/gone.json")) && asides.length === 1 && readFileSync(join(kit, "templates", asides[0]), "utf8") === "本人が書き換えた\n" && readFileSync(join(kit, "templates/reader-test.md"), "utf8") === readFileSync(join(ROOT, "templates/reader-test.md"), "utf8") && /別の名前で残しました/.test(r.stdout), r.stdout.slice(-400) + r.stderr);
+  rmSync(join(kit, "templates", asides[0]));
+  // 入れ替えの途中で止まっても書き直せる（kit.json が消えて、kit の名前のものだけが残った状態・一時ディレクトリが残った状態）
+  const half = join(tmp("jp-kithalf-"), "ja-proofread-kit");
+  r = run([DIST, "--project-kit", half]);
+  rmSync(join(half, "kit.json")); rmSync(join(half, "skills"), { recursive: true }); mkdirSync(join(half, ".ja-proofread-kit-new-xyz"));
+  r = run([DIST, "--project-kit", half]);
+  ok("kit.json がなく kit の名前のものだけが残ったディレクトリや、入れ替えの一時ディレクトリが残ったディレクトリにも書き直せる", r.status === 0 && existsSync(join(half, "kit.json")) && existsSync(join(half, "skills/write/SKILL.md")) && !existsSync(join(half, ".ja-proofread-kit-new-xyz")) && sumsOk(half).status === 0, r.stderr);
+  // 危ない場所には書かない
+  const bad = [["/mnt/project-files", /使えません/], [join(pf, "notes"), /名前に kit が入っていません/], [join(pf, "a$b-kit"), /" \$ ` \\/], [join(pf, 'q"-kit'), /" \$ ` \\/], [homedir(), /使えません|名前に kit/]];
+  const badR = bad.map(([d, re]) => { const x = run([DIST, "--project-kit", d]); return x.status === 1 && re.test(x.stderr) ? "" : `${d}: ${x.status} ${x.stderr.slice(0, 120)}`; }).filter(Boolean);
+  ok("/mnt/project-files・HOME・名前に kit のない場所・\" $ ` を含むパスには書かない", badR.length === 0 && !existsSync(join(pf, "kit.json")), badR.join(" | "));
+  const other = join(tmp("jp-kitother-"), "my-kit");
+  write(other, "notes.md", "本人のメモ\n");
+  r = run([DIST, "--project-kit", other]);
+  ok("kit でない、空でないディレクトリには何も書かずに止める", r.status === 1 && /kit（kit.json）でもない/.test(r.stderr) && readdirSync(other).join(",") === "notes.md", r.stderr);
+  // --remove：kit の分だけ消し、本人のファイル・記録の置き場は残し、名前を示す。そのあと書き直せる
+  writeFileSync(join(kit, "rules/ledger-patterns.js"), readFileSync(join(kit, "rules/ledger-patterns.js"), "utf8") + "\n// 本人の追記\n");
   r = run([DIST, "--project-kit", kit, "--remove"]);
-  ok("--project-kit … --remove で kit の分だけ消し、利用者のファイルと記録の置き場は残す", r.status === 0 && readdirSync(kit).join(",") === "mine.txt" && existsSync(join(kdata, "hits.jsonl")), readdirSync(kit).join(",") + r.stderr);
+  const leftAfter = allFiles(kit).map((p) => relative(kit, p)).sort().join(",");
+  ok("--project-kit … --remove で、kit が書いて変わっていないものだけを消し、残したファイルの名前と記録の置き場を示す", r.status === 0 && leftAfter === "kit.json,mine.txt,rules,rules/ledger-patterns.js,templates,templates/my-template.md" && /mine\.txt/.test(r.stdout) && /templates\/my-template\.md/.test(r.stdout) && /記録の置き場（[^）]*）は残しています/.test(r.stdout) && existsSync(join(kdata, "hits.jsonl")), leftAfter + " / " + r.stdout + r.stderr);
+  r = run([DIST, "--project-kit", kit]);
+  ok("--remove のあとに本人のファイルが残ったディレクトリにも、書き直せる", r.status === 0 && existsSync(join(kit, "mine.txt")) && existsSync(join(kit, "templates/my-template.md")) && sumsOk(kit).status === 0, r.stderr);
+  const clean = join(tmp("jp-kitclean-"), "ja-proofread-kit");
+  run([DIST, "--project-kit", clean]);
+  r = run([DIST, "--project-kit", clean, "--remove"]);
+  ok("本人のファイルがなければ、--remove で kit の場所ごと消し、記録の置き場がないことも示す", r.status === 0 && !existsSync(clean) && /記録の置き場（[^）]*）はありません/.test(r.stdout), r.stdout + r.stderr);
   const asKit = join(tmp("jp-kitas-"), "kit");
   r = run([DIST, "--project-kit", asKit, "--as", "/mnt/project-files/ja-proofread-kit"]);
   const asText = ["PROJECT-INSTRUCTIONS.md", "skills/proofread/SKILL.md"].map((f) => readFileSync(join(asKit, f), "utf8")).join("\n");
-  ok("--as を付けると、手元で作った kit の手順と指示のパスを使う場所で書く（アップロード向け）", r.status === 0 && asText.includes('node "/mnt/project-files/ja-proofread-kit/scripts/proofread.mjs"') && asText.includes("/mnt/project-files/ja-proofread-data") && !asText.includes(asKit), r.stderr);
-  r = run([DIST, "--project-kit", join(pf, "none"), "--remove"]);
-  ok("kit が無いときの --remove は何も変えずに終える", r.status === 0 && /kit はありません/.test(r.stdout) && !existsSync(join(pf, "none")), r.stdout + r.stderr);
+  ok("--as を付けると、手元で作った kit の手順と指示のパスを使う場所で書き、名前が違えば注意を出す（アップロード向け）", r.status === 0 && asText.includes('node "/mnt/project-files/ja-proofread-kit/scripts/proofread.mjs"') && asText.includes("/mnt/project-files/ja-proofread-data") && !asText.includes(asKit) && /名前（kit）と --as の名前（ja-proofread-kit）が違います/.test(r.stderr), r.stderr);
+  r = run([DIST, "--project-kit", join(pf, "none-kit"), "--remove"]);
+  ok("kit が無いときの --remove は何も変えずに終える", r.status === 0 && /kit はありません/.test(r.stdout) && !existsSync(join(pf, "none-kit")), r.stdout + r.stderr);
 }
 
 // 12. 一時ディレクトリを残さない（このテストが作ったものは、ここで消す）

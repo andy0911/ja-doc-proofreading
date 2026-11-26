@@ -2,12 +2,16 @@
 // textlint などの依存を、プラグインの更新で消えない場所（データ置き場の deps/）に入れる。
 // package.json か package-lock.json が変わったときだけ入れ直す。SessionStart フックと、校正の実行前に呼ばれる。
 //   --quiet  フックから呼ぶとき。成功しても何も出さず、失敗したときだけ Claude と利用者に知らせる JSON を出す
+//   --force  入れるのに失敗したばかりでも、待たずにもう一度試す
+// 入れるのに失敗したら、依存の置き場に印（.failed）を書き、10分は試さない（校正のたびに npm を待たせないため）
 import { copyFileSync, writeFileSync, existsSync, mkdirSync, rmSync, statSync, openSync, closeSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
 import { ROOT, depsDir, depsHash, depsReady } from "./lib.mjs";
 
 const quiet = process.argv.includes("--quiet");
+const force = process.argv.includes("--force");
+const RETRY_AFTER_MS = 10 * 60 * 1000;
 const log = (m) => { if (!quiet) process.stderr.write(m + "\n"); };
 const STALE_MS = 15 * 60 * 1000;
 
@@ -27,6 +31,19 @@ if (depsReady()) { log("ja-proofread: 依存は入っています"); process.exi
 const dir = depsDir();
 mkdirSync(dir, { recursive: true });
 const lock = join(dir, ".lock");
+const failMark = join(dir, ".failed");
+
+// 少し前に同じ依存（package.json と lock が同じ）で失敗していたら、試さずに知らせて終える
+if (!force) {
+  let mark = null;
+  try { mark = JSON.parse(readFileSync(failMark, "utf8")); } catch { /* 印なし */ }
+  const age = mark ? Date.now() - Number(mark.at) : NaN;
+  if (mark && mark.hash === depsHash() && age >= 0 && age < RETRY_AFTER_MS) {
+    const min = Math.max(1, Math.ceil((RETRY_AFTER_MS - age) / 60000));
+    report(`textlint などの依存は、少し前に入れられませんでした（${mark.why || "理由は不明"}）。あと${min}分は試しません。すぐに試すときは \`node "${join(ROOT, "scripts", "ensure-deps.mjs")}" --force\` を実行してください。`);
+    process.exit(0);
+  }
+}
 
 function alive(pid) {
   if (!Number.isInteger(pid) || pid <= 0) return false;
@@ -66,9 +83,11 @@ try {
     const errLines = (r.stderr || "").split("\n").filter((l) => /^npm (error|ERR!)/.test(l) && !/complete log/.test(l));
     const why = r.error ? r.error.message : (errLines.slice(0, 3).join(" ") || (r.stderr || "").trim().slice(-400));
     report(`textlint などの依存を入れられませんでした。ネットワーク（registry.npmjs.org）を確かめてください。${why ? `npm の出力：${why}` : ""}`);
+    try { writeFileSync(failMark, JSON.stringify({ at: Date.now(), hash: depsHash(), why: (why || "").slice(0, 300) })); } catch { /* 印を書けなくても続ける */ }
     process.exitCode = 0; // セッションは止めない
   } else {
     writeFileSync(join(dir, ".stamp"), depsHash());
+    rmSync(failMark, { force: true });
     log("ja-proofread: 依存を入れました");
   }
 } finally {

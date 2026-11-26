@@ -15,15 +15,17 @@ export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 // データ置き場（依存・検出の記録・誤検知の記録・フックの前回結果）。
 // フックには CLAUDE_PLUGIN_DATA が渡る。スキルから動かすときは JA_PROOFREAD_DATA に同じ場所を渡す。
-// Projects 向けの kit（install-project-kit.mjs が書く）では、根の kit.json の data に記録の置き場（kit からの相対パス）がある。
+// Projects 向けの kit（install-project-kit.mjs が書く）では、根に kit.json がある。記録の置き場は kit の隣の ja-proofread-data に決めてある
+// （kit.json の data の値は案内のためのもので、使わない。kit.json は照らし合わせの対象にしないため）。
 // 記録はスレッドをまたいで残したいので /mnt/project-files の下に置き、依存（node_modules）は既定の場所（~/.cache）に入れる
 const defaultCache = () => join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "ja-proofread");
 const envData = () => process.env.JA_PROOFREAD_DATA || process.env.CLAUDE_PLUGIN_DATA || "";
+export const KIT_DATA_REL = "../ja-proofread-data";
+export function isKitRoot() {
+  try { return JSON.parse(readFileSync(join(ROOT, "kit.json"), "utf8"))?.name === "ja-proofread-kit"; } catch { return false; }
+}
 function kitData() {
-  try {
-    const k = JSON.parse(readFileSync(join(ROOT, "kit.json"), "utf8"));
-    return k && k.name === "ja-proofread-kit" && typeof k.data === "string" && k.data ? resolve(ROOT, k.data) : "";
-  } catch { return ""; }
+  return isKitRoot() ? resolve(ROOT, KIT_DATA_REL) : "";
 }
 export function dataDir() {
   const d = envData() || kitData() || defaultCache();
@@ -51,8 +53,9 @@ export function textlintBin() {
   const stamp = join(depsDir(), ".stamp");
   const inData = join(depsDir(), "node_modules", "textlint", "bin", "textlint.js");
   if (existsSync(stamp) && readFileSync(stamp, "utf8").trim() === depsHash() && existsSync(inData)) return inData;
+  // kit の中の node_modules は使わない（kit.sha256 の照らし合わせに入らず、共有フォルダーでほかのスレッドが置けるため）
   const inRoot = join(ROOT, "node_modules", "textlint", "bin", "textlint.js");
-  if (existsSync(inRoot)) return inRoot;
+  if (!isKitRoot() && existsSync(inRoot)) return inRoot;
   return null;
 }
 
