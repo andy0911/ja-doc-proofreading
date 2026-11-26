@@ -4,6 +4,7 @@
 //   繰り返すグループの中の選択（(?:漢|漢字?)+ など）も形で拒否する。選択肢が重なると、長い文で止まるため。
 //     ただし、選択肢がどれも「1文字か文字クラス1つ」で、選択肢どうしが同じ文字に当たらないもの（(?:、|,)+ など）は通す
 //     （選択肢がとても多く、確かめる手間が上限を超えるものは、確かめきれないとして拒否する）
+//     u なしの \u{…} \p{…} \P{…} は1文字ではない（\u{2} は「u を2回」）ので、その選択は安全と確かめられないものとして扱う
 //   長い繰り返し文字列（かな・カタカナ・漢字・全角英数字・記号・ASCII の記号・空白と改行の混ざった数万文字・
 //     正規表現に出てくる文字×2000 など）で時間を測り、遅いものを拒否する
 //   長さ0で一致し得るもの（空文字、? や * だけ、先読み・後読みだけ、など）を拒否する
@@ -56,7 +57,9 @@ function quantMin(src, i) {
 
 // 一致する文字列の最短の長さ（文字の数の下限）。0 なら空文字に一致し得る。
 // 後方参照は 0 と数える（安全側）。正しい正規表現であることは先に new RegExp で確かめておく
-export function minLength(src) {
+// u なしでは \u{…} \p{…} \P{…} は「u や p の1文字」と、その後ろの {…}（回数か、ただの文字）として読む
+export function minLength(src, flags = "") {
+  const u = String(flags || "").includes("u");
   let i = 0, depth = 0;
   function alt() {
     let best = seq();
@@ -79,7 +82,7 @@ export function minLength(src) {
       if (d === "b" || d === "B") { i += 2; return 0; }
       if (/[1-9]/.test(d)) { i += 1; while (/\d/.test(src[i])) i++; return 0; }
       if (d === "k" && src[i + 2] === "<") { i = src.indexOf(">", i) + 1; return 0; }
-      if ((d === "p" || d === "P" || d === "u") && src[i + 2] === "{") { i = src.indexOf("}", i) + 1; return 1; }
+      if (u && (d === "p" || d === "P" || d === "u") && src[i + 2] === "{") { i = src.indexOf("}", i) + 1; return 1; }
       if (d === "u" && /^[0-9a-fA-F]{4}/.test(src.slice(i + 2))) { i += 6; return 1; }
       if (d === "x" && /^[0-9a-fA-F]{2}/.test(src.slice(i + 2))) { i += 4; return 1; }
       if (d === "c" && /[A-Za-z]/.test(src[i + 2] || "")) { i += 3; return 1; }
@@ -121,7 +124,14 @@ export function groupDepth(src) {
   return max;
 }
 
-// 1つの選択肢が「1文字か文字クラス1つ」か（\s \d \p{…} 　 . [^…] などを含む）
+// 1つの選択肢が「1文字か文字クラス1つ」か（\s \d \p{…} 　 . [^…] などを含む）。
+// \u{…} \p{…} \P{…} が1文字（文字クラス）になるのは u のときだけ。u なしでは \u{2} は「u を2回」、\p{L} は「p{L}」の4文字なので、
+// その選択肢は1文字と見なさない（重ならないと確かめられない選択として拒否する）
+const NON_U_MULTI = /^\\[upP]\{/;
+function singleAtom(part, u) {
+  if (!u && NON_U_MULTI.test(part)) return false;
+  return SINGLE_ATOM.test(part);
+}
 const SINGLE_ATOM = /^(?:\\u\{[0-9a-fA-F]+\}|\\u[0-9a-fA-F]{4}|\\x[0-9a-fA-F]{2}|\\c[A-Za-z]|\\[pP]\{[^}]+\}|\\[^1-9bBkc]|\[(?:\\[\s\S]|[^\]\\])*\]|\.|[^\\[\](){}|*+?^$.])$/su;
 
 // グループの中身を、いちばん外の | で分ける
@@ -157,12 +167,18 @@ function topAlternatives(content) {
 // 1文字そのものの選択肢と文字クラスの選択肢は、別の木にする（文字クラスをまとめた正規表現は、1文字のものより重いため）。
 //
 // 確かめる手間（選択肢の重さの合計×当てる文字の数と、当たった文字を木で確かめた分）には上限 MAX_DISJOINT_WORK を設ける。
-// 超えるものは「確かめきれない」（unverifiable）として拒否する。時刻ではなく手間で決まるので、記録に残してよい
+// 超えるものは「確かめきれない」（unverifiable）として拒否する。時刻ではなく手間で決まるので、記録に残してよい。
+// 1文字そのものの選択肢は、V8 がまとめて1つの文字クラスのように当てるので、k 個の重さを 1＋log2(k) とする
+// （1つずつ数えると、常用漢字相当の2136字の選択のような、実際には数十ms で確かめ終わるものまで拒否していたため）。
+// 文字クラスの選択肢はまとめて当てられないので、1つずつ CLASS_WEIGHT と数える
 const ASTRAL_CAPABLE = /\.|\\[SWDpP]|\[\^|\\u\{|\\u[dD][89a-fA-F]|[\uD800-\uDFFF]/;
 // 文字クラスの選択肢（[…] . \s \d \w \p{…} とその否定）。それ以外は1文字そのもの（エスケープを含む）
 const CLASS_LIKE = /^(?:\[|\.$|\\[sSdDwWpP])/;
 // 文字クラスの選択肢の重さ（1文字の選択肢を1とする）。手間を見積もるときに使う
 export const CLASS_WEIGHT = 16;
+export const litWeight = (k) => (k > 0 ? 1 + Math.log2(k) : 0);
+// 木の節（正規表現）1つを作る手間。1文字の選択肢がとても多いと、当てるより作るほうに時間がかかるため
+export const NODE_WORK = 30000;
 export const MAX_DISJOINT_WORK = 2e9;
 const disjointMemo = new Map();
 // deadline（performance.now() の値）を渡すと、当てる途中でも一定の文字数ごとに時刻を確かめ、越えたら PENDING を投げる
@@ -175,7 +191,7 @@ export function disjointVerdict(content, flags = "", { deadline = Infinity } = {
   if (disjointMemo.has(key)) return disjointMemo.get(key);
   let v = "no";
   const parts = topAlternatives(content);
-  if (parts.length >= 2 && parts.every((p) => SINGLE_ATOM.test(p))) {
+  if (parts.length >= 2 && parts.every((p) => singleAtom(p, f.includes("u")))) {
     try { v = disjointByScan(parts, f, deadline); }
     catch (e) { if (e === PENDING) throw e; v = "no"; }
   }
@@ -188,11 +204,11 @@ export function simpleDisjointAlternation(content, flags = "", opts = {}) {
   return disjointVerdict(content, flags, opts) === "yes";
 }
 
-// 選択肢をまとめた正規表現の二分木。w はその節の選択肢の重さの合計（当てたときの手間として数える）
+// 選択肢をまとめた正規表現の二分木。w はその節の選択肢の重さ（当てたときの手間として数える）。weight は選択肢の数から重さを返す
 function buildTree(parts, f, weight) {
   if (!parts.length) return null;
   const build = (lo, hi) => {
-    const node = { re: new RegExp(`^(?:${parts.slice(lo, hi).join("|")})$`, f), w: (hi - lo) * weight, l: null, r: null };
+    const node = { re: new RegExp(`^(?:${parts.slice(lo, hi).join("|")})$`, f), w: weight(hi - lo), l: null, r: null };
     if (hi - lo > 1) { const mid = (lo + hi) >> 1; node.l = build(lo, mid); node.r = build(mid, hi); }
     return node;
   };
@@ -205,9 +221,12 @@ function disjointByScan(parts, f, deadline) {
   const lits = parts.filter((p) => !CLASS_LIKE.test(p));
   const classes = parts.filter((p) => CLASS_LIKE.test(p));
   // まとめた正規表現を全部の文字に1回ずつ当てる手間。先に見積もり、上限を超えるなら当てずに決める
-  let work = (max + 1) * (lits.length + classes.length * CLASS_WEIGHT);
+  // 木を作る（正規表現を組み立てる）手間として、節ごとの NODE_WORK と、木の正規表現の長さの合計（選択肢の長さ×段の数）も足す
+  const depthOf = (n) => (n > 1 ? Math.ceil(Math.log2(n)) + 1 : 1);
+  const treeWork = (xs) => (xs.length ? (2 * xs.length - 1) * NODE_WORK + xs.reduce((a, p) => a + p.length + 1, 0) * depthOf(xs.length) : 0);
+  let work = (max + 1) * (litWeight(lits.length) + classes.length * CLASS_WEIGHT) + treeWork(lits) + treeWork(classes);
   if (work > MAX_DISJOINT_WORK) return "unverifiable";
-  const trees = [buildTree(lits, f, 1), buildTree(classes, f, CLASS_WEIGHT)].filter(Boolean);
+  const trees = [buildTree(lits, f, litWeight), buildTree(classes, f, (k) => k * CLASS_WEIGHT)].filter(Boolean);
   // 節 node に当たると分かっている文字 s が、その下の選択肢のいくつに当たるか（need 個まで数えたら止める）
   const count = (node, s, need) => {
     if (!node.l) return 1;
@@ -320,10 +339,12 @@ const FIXED = (() => {
   return out;
 })();
 
-// 正規表現の中のエスケープ1つを、それが表す1文字にする（\p{…} や \b などは null）
-function escapeChar(src, i) {
+// 正規表現の中のエスケープ1つを、それが表す1文字にする（\p{…} や \b などは null）。
+// u なしの \u{…} \p{…} \P{…} は、u・p・P の1文字（後ろの {…} は、ただの文字か回数として読み進める）
+function escapeChar(src, i, u = true) {
   const d = src[i + 1];
   let m;
+  if (!u && (d === "u" || d === "p" || d === "P") && src[i + 2] === "{") return { ch: d, end: i + 2 };
   if ((m = /^\\u\{([0-9a-fA-F]+)\}/.exec(src.slice(i))) && parseInt(m[1], 16) <= 0x10ffff) return { ch: String.fromCodePoint(parseInt(m[1], 16)), end: i + m[0].length };
   if ((m = /^\\u([0-9a-fA-F]{4})/.exec(src.slice(i)))) return { ch: String.fromCharCode(parseInt(m[1], 16)), end: i + 6 };
   if ((m = /^\\x([0-9a-fA-F]{2})/.exec(src.slice(i)))) return { ch: String.fromCharCode(parseInt(m[1], 16)), end: i + 4 };
@@ -334,17 +355,18 @@ function escapeChar(src, i) {
 }
 
 // 正規表現に出てくる文字（文字そのもの、エスケープ、文字クラスの中の文字と範囲の両端）を、出てきた順に最大40個
-export function regexChars(src) {
+export function regexChars(src, flags = "u") {
+  const u = String(flags || "").includes("u");
   const out = new Set();
   const add = (ch) => { if (ch && out.size < 40) out.add(ch); };
   for (let i = 0; i < src.length && out.size < 40; i++) {
     const c = src[i];
-    if (c === "\\") { const e = escapeChar(src, i); add(e.ch); i = e.end - 1; continue; }
+    if (c === "\\") { const e = escapeChar(src, i, u); add(e.ch); i = e.end - 1; continue; }
     if (c === "[") {
       let j = i + 1;
       if (src[j] === "^") j++;
       for (; j < src.length && src[j] !== "]"; j++) {
-        if (src[j] === "\\") { const e = escapeChar(src, j); add(e.ch); j = e.end - 1; continue; }
+        if (src[j] === "\\") { const e = escapeChar(src, j, u); add(e.ch); j = e.end - 1; continue; }
         const cp = src.codePointAt(j);
         add(String.fromCodePoint(cp));
         if (cp > 0xffff) j++;
@@ -360,11 +382,17 @@ export function regexChars(src) {
   return [...out];
 }
 
-export function samplesFor(pattern) {
-  const chars = regexChars(pattern).filter((c) => !BASE.includes(c));
+// TAIL：繰り返しの後ろで一致に失敗させる、2バイトの文字（V8 は1バイトの文字列だけのときに、
+// 正規表現の中の1バイトでない文字には当たらないと先に決めて速く終わるため、1バイトの見本では遅い形を見落とす）
+const TAIL = "\uFFFF";
+export function samplesFor(pattern, flags = "u") {
+  const all = regexChars(pattern, flags);
+  const chars = all.filter((c) => !BASE.includes(c));
   const out = [...FIXED];
   for (const c of chars) { out.push(c.repeat(2000)); out.push(c.repeat(40) + "\u0001"); }
-  const all = regexChars(pattern);
+  // 正規表現の中の文字×40 の後ろに、2バイトの文字と、正規表現の最後の文字そのものを置いた見本（(?:\u{2}|u)+す のような形は、ここで遅くなる）
+  const last = all[all.length - 1];
+  for (const c of all) { out.push(c.repeat(40) + TAIL); if (last) out.push(c.repeat(40) + last); }
   for (let k = 0; k + 1 < all.length && k < 10; k++) out.push((all[k] + all[k + 1]).repeat(1000));
   return out;
 }
@@ -373,7 +401,7 @@ function probe(pattern, flags) {
   const re = new RegExp(pattern, flags + "g");
   let empty = false;
   const t0 = process.hrtime.bigint();
-  for (const s of samplesFor(pattern)) {
+  for (const s of samplesFor(pattern, flags)) {
     for (const m of s.matchAll(re)) { if (m[0].length === 0) { empty = true; break; } }
   }
   const ms = Number(process.hrtime.bigint() - t0) / 1e6;
@@ -398,7 +426,7 @@ export function checkShape(pattern, flags = "", { allowEmpty = false, deadline =
   if (shape === "unverifiable") return [`繰り返すグループの中の選択肢が多く、互いに同じ文字に当たらないかを確かめる手間が上限（${MAX_DISJOINT_WORK / 1e8}億）を超えるため、安全と確かめられず使えません。選択肢をいくつかの文字クラス（[…]）にまとめるか、規則を分けてください`];
   if (shape === "alternation") return ["繰り返すグループの中に | があります（(?:漢|漢字?)+ のような形）。選択肢が重なると長い文で止まるおそれがあるため使えません。[漢字] のような文字クラスにするか、繰り返しの外で選んでください（選択肢がどれも1文字か文字クラス1つで、互いに同じ文字に当たらないときは使えます）"];
   let min;
-  try { min = minLength(pattern); } catch (e) { return [`形を確かめられませんでした（${String(e?.message || e).slice(0, 100)}）`]; }
+  try { min = minLength(pattern, f); } catch (e) { return [`形を確かめられませんでした（${String(e?.message || e).slice(0, 100)}）`]; }
   if (!allowEmpty && min === 0) return ["長さ0の文字列に一致し得ます（空文字、? や * だけの形、先読み・後読みだけの形など）"];
   return [];
 }

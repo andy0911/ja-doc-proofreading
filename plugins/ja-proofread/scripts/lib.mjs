@@ -199,33 +199,40 @@ export const LEDGER_RULE = join(ROOT, "rules", "ledger-patterns.js");
 
 // tmp を渡すと、プロジェクトの prh 辞書を検査して、通った規則だけを書いた辞書をそこに置く。
 // prhDeadline は、すべての辞書の読み込みと検査で分け合う締め切り（performance.now() の値。時計が巻き戻っても延びないよう、単調に進む時刻を使う）。
-// 辞書ごとに、残りの時間を残りの辞書の数で割った時間までにする（1つ目の辞書が止まっても、2つ目の辞書の時間が残るため。
-// 早く終わった辞書の残りの時間は、後の辞書に回る）。prhBudgetMs は警告に書く上限（実際に使う時間）
-export function buildTextlintConfig(profile, cfg, { tmp = null, prhDeadline = performance.now() + PRH_BUDGET_MS, prhBudgetMs = prhDeadline - performance.now() } = {}) {
+// 後ろの辞書（見つかるもの）には1つあたり PRH_DICT_MIN_MS だけを残し、残りは今の辞書が使う（辞書が多いと、等分では1つの辞書に回せる時間が
+// 小さくなり、重い規則がいつまでも確かめ終わらないため）。ただし、今の辞書には少なくとも等分した時間を回す。
+// 早く終わった辞書の残りの時間は、後の辞書に回る。prhBudgetMs は警告に書く上限（実際に使う時間）。
+// prhState は、1回の校正（種類 doc・slide ごとに何度か呼ぶ）で分け合う状態（newPrhState）。渡したときは、時間内に確かめ終わらなかった
+// 規則の知らせを返さず、呼んだ側がすべての種類を見終えてから prhPendingWarnings で1回だけ作る。渡さないときは、この中で作って返す
+export const PRH_DICT_MIN_MS = 2000;
+export function newPrhState() {
+  return { progressed: false, pending: new Map(), timedOut: new Set() };
+}
+export function buildTextlintConfig(profile, cfg, { tmp = null, prhDeadline = performance.now() + PRH_BUDGET_MS, prhBudgetMs = prhDeadline - performance.now(), prhState = null } = {}) {
   checkProfile(profile);
   const base = readJSON(join(ROOT, "config", `${profile}.textlintrc.json`));
   const conf = JSON.parse(JSON.stringify(base));
   const warnings = [];
   const extra = [];
-  const dicts = cfg.prh || [];
-  const state = { progressed: false, pending: [] };
-  dicts.forEach((p, n) => {
-    const abs = resolve(dirname(cfg.path), p);
+  const dicts = (cfg.prh || []).map((p) => ({ p, abs: resolve(dirname(cfg.path), p) }));
+  const state = prhState || newPrhState();
+  // 見つからない辞書と、この校正で読み込みが時間切れになった辞書は、時間を分ける数に入れない
+  const usable = dicts.map((d) => existsSync(d.abs) && !state.timedOut.has(d.abs));
+  dicts.forEach(({ p, abs }, n) => {
     if (!existsSync(abs)) { warnings.push(`prh の辞書 ${p} が見つからないため外しました`); return; }
+    // 読み込みが時間切れになった辞書は、この校正の中で読み直さない（警告は1回目に出している）
+    if (state.timedOut.has(abs)) return;
     const now = performance.now();
-    const dictDeadline = now + Math.max(0, prhDeadline - now) / (dicts.length - n);
+    const left = Math.max(0, prhDeadline - now);
+    const later = usable.slice(n + 1).filter(Boolean).length;
+    const dictMs = Math.max(left - later * PRH_DICT_MIN_MS, left / (later + 1));
+    const dictDeadline = now + dictMs;
     // プロジェクトの辞書も、同梱の辞書と同じ検査を通す。通らない規則だけを外した辞書を、一時ディレクトリに書いて渡す
-    const r = checkedPrhDictionary(abs, p, tmp && join(tmp, `prh-${n}.yml`), dictDeadline, { budgetMs: prhBudgetMs, dictMs: dictDeadline - now, dicts: dicts.length, state });
+    const r = checkedPrhDictionary(abs, p, tmp && join(tmp, `prh-${n}.yml`), dictDeadline, { budgetMs: prhBudgetMs, dictMs, dicts: later + 1, state });
     warnings.push(...r.warnings);
     if (r.path) extra.push(r.path);
   });
-  // 時間内に確かめ終わらなかった規則の知らせは、すべての辞書を見てから作る。
-  // 「次の校正で続きを確かめます」と書くのは、今回どれかの辞書で記録が増えたとき（次の校正が今回より先に進むとき）だけ
-  for (const x of state.pending) {
-    warnings.push(state.progressed
-      ? `prh の辞書 ${x.label} の ${x.count}件の規則は、時間内に確かめ終わらなかったため今回は外しました（次の校正で続きを確かめます）`
-      : `prh の辞書 ${x.label} の ${x.count}件の規則は、時間の上限（${seconds(prhBudgetMs)}秒）のうちに確かめ終わらなかったため外しました。今回は確かめ終えたものが無く、次の校正でも同じところで止まります。環境変数 JA_PROOFREAD_PRH_BUDGET_MS で上限を延ばすか、選択肢の多い規則を分けてください`);
-  }
+  if (!prhState) warnings.push(...prhPendingWarnings(state, prhBudgetMs));
   conf.rules = conf.rules || {};
   conf.rules.prh = { rulePaths: [join(ROOT, "data", "prh.yml"), ...extra] };
   // rulesdir のルールには設定を渡せないため、ルールのファイルを絶対パスで指定する
@@ -242,6 +249,18 @@ export function buildTextlintConfig(profile, cfg, { tmp = null, prhDeadline = pe
     }
   }
   return { conf, warnings };
+}
+
+// 時間内に確かめ終わらなかった規則の知らせ。すべての辞書（と、すべての種類）を見てから1回だけ作る。
+// 「次の校正で続きを確かめます」と書くのは、今回どれかの辞書で記録が増えたとき（次の校正が今回より先に進むとき）だけ
+export function prhPendingWarnings(state, budgetMs) {
+  const out = [];
+  for (const [label, x] of state.pending) {
+    out.push(state.progressed
+      ? `prh の辞書 ${label} の ${x.count}件の規則は、この辞書に回せた時間（${seconds(x.dictMs)}秒）に確かめ終わらなかったため今回は外しました（次の校正で続きを確かめます）`
+      : `prh の辞書 ${label} の ${x.count}件の規則は、この辞書に回せた時間（${seconds(x.dictMs)}秒。上限 ${seconds(budgetMs)}秒のうち）に確かめ終わらなかったため外しました。今回は確かめ終えたものが無く、次の校正でも同じところで止まります。環境変数 JA_PROOFREAD_PRH_BUDGET_MS で上限を延ばすか、選択肢の多い規則を分けるか、辞書の数を減らしてください`);
+  }
+  return out;
 }
 
 // 正規表現ごとの検査の記録（データ置き場の regex-checked.json）。通ったものも、拒否したものも残す。
@@ -281,6 +300,13 @@ function regexCache() {
       order?.set(k, Infinity);
       dirty = true;
     },
+    delete(k) {
+      if (!Object.hasOwn(data, k)) return;
+      delete data[k];
+      size--;
+      order?.delete(k);
+      dirty = true;
+    },
     size: () => size,
     save() {
       if (!dirty) return;
@@ -297,7 +323,7 @@ function regexCache() {
 // 重い1件が締め切りまで使っても、ほかの規則が毎回外れないよう、次のようにする。
 //   ・軽いもの（短いもの）から順に形を確かめる
 //   ・形の検査は、時間を測る分を残した締め切りまでにする
-//   ・形の検査を通ったことも記録に残す（次の校正では、形を確かめ直さずに時間を測る）
+//   ・形の検査を通ったことも記録に残す（次の校正では、形を確かめ直さずに時間を測る）。最終の結果を記録したら、その印は消す
 // 返す配列の progressed は、今回、記録に新しく足したものがあるか（無ければ、次の校正でも同じところで止まる）
 const SHAPE_OK = "shape-ok:";
 const MEASURE_RESERVE_MS = 500, MEASURE_RESERVE_PER_MS = 5;
@@ -333,7 +359,7 @@ export function checkRegexesCached(list, { budgetMs = PRH_BUDGET_MS, deadline = 
     uniq.forEach((k, n) => {
       const m = measured[n];
       if (m && m.transient) unmeasured.set(keys[k], m);
-      else if (m) put(keys[k], m);
+      else if (m) { put(keys[k], m); cache.delete(SHAPE_OK + keys[k]); }
     });
   }
   for (const k of todo) out[k] = cache.get(keys[k]) ?? unmeasured.get(keys[k]) ?? null;
@@ -371,7 +397,8 @@ function loadPrhInChild(abs, deadline) {
 function checkedPrhDictionary(abs, label, outPath, deadline = performance.now() + PRH_BUDGET_MS, { budgetMs = deadline - performance.now(), dictMs = budgetMs, dicts = 1, state = null } = {}) {
   if (!loadPrh()) return { path: null, warnings: [`textlint の依存（prh）が見つからないため、prh の辞書 ${label} は使いません`] };
   const engine = loadPrhInChild(abs, deadline);
-  const share = dicts > 1 ? `この辞書に回せた時間は ${seconds(dictMs)}秒です（上限 ${seconds(budgetMs)}秒を、残りの辞書の数で分けています）` : `時間の上限は ${seconds(budgetMs)}秒です`;
+  const share = dicts > 1 ? `この辞書に回せた時間は ${seconds(dictMs)}秒です（上限 ${seconds(budgetMs)}秒のうち、後ろの辞書に1つあたり${seconds(PRH_DICT_MIN_MS)}秒までを残しています）` : `この辞書に回せた時間は ${seconds(dictMs)}秒です（上限 ${seconds(budgetMs)}秒）`;
+  if (engine.timeout) state?.timedOut.add(abs);
   if (engine.timeout) return { path: null, warnings: [`prh の辞書 ${label} を時間内に読み終えなかったため、辞書ごと外しました（prh は読み込むときに specs の例文を正規表現に当てるため、止まるおそれのある正規表現と長い例文があると終わりません。${share}）`] };
   if (!engine.ok) return { path: null, warnings: [`prh の辞書 ${label} を読めないため外しました（${engine.error}）`] };
   const items = [];
@@ -403,10 +430,11 @@ function checkedPrhDictionary(abs, label, outPath, deadline = performance.now() 
   const warnings = [];
   if (badRules.size) warnings.push(`prh の辞書 ${label} の ${badRules.size}件の規則に使えない正規表現があるため、その規則だけを外しました：${shown(msgs)}`);
   if (pending.size) {
-    if (state) state.pending.push({ label, count: pending.size });
-    else warnings.push(results.progressed
-      ? `prh の辞書 ${label} の ${pending.size}件の規則は、時間内に確かめ終わらなかったため今回は外しました（次の校正で続きを確かめます）`
-      : `prh の辞書 ${label} の ${pending.size}件の規則は、時間の上限（${seconds(budgetMs)}秒）のうちに確かめ終わらなかったため外しました。今回は確かめ終えたものが無く、次の校正でも同じところで止まります。環境変数 JA_PROOFREAD_PRH_BUDGET_MS で上限を延ばすか、選択肢の多い規則を分けてください`);
+    // 種類（doc・slide）ごとに同じ辞書を見るので、辞書ごとに1つにまとめる（外した数がいちばん多かった回の数と、その回に回せた時間）
+    const st = state || newPrhState();
+    const prev = st.pending.get(label);
+    if (!prev || pending.size > prev.count) st.pending.set(label, { count: pending.size, dictMs });
+    if (!state) { st.progressed = results.progressed; warnings.push(...prhPendingWarnings(st, budgetMs)); }
   }
   // 外す規則がなくても、確かめたものと同じ中身を渡すため、書き出したものを使う。
   // 一時ディレクトリがないとき（buildTextlintConfig だけを呼んだとき）は、外す規則がなければ元の辞書を指す
@@ -430,7 +458,7 @@ addJudgeVersion(createHash("sha256").update(checkRegexesCached.toString()).updat
 // deadline（performance.now() の値）を渡すと、textlint をそれまでに打ち切る（フックの時間の上限に収めるため）。渡さなければ120秒
 export const TEXTLINT_TIMEOUT_MS = 120000;
 const TEXTLINT_RESERVE_MS = 10000;
-export function runTextlint(files, profile, cfg, { deadline, prhDeadline, prhBudgetMs } = {}) {
+export function runTextlint(files, profile, cfg, { deadline, prhDeadline, prhBudgetMs, prhState } = {}) {
   const bin = textlintBin();
   if (!bin) {
     return { ok: false, lintError: "textlint の依存がまだ入っていません。`node " + join(ROOT, "scripts", "ensure-deps.mjs") + "` を実行してください。", results: [], warnings: [] };
@@ -439,7 +467,7 @@ export function runTextlint(files, profile, cfg, { deadline, prhDeadline, prhBud
   const tmp = mkdtempSync(join(tmpdir(), "ja-proofread-"));
   let r, warnings = [], timeoutMs;
   try {
-    const built = buildTextlintConfig(profile, cfg, { tmp, ...(prhDeadline ? { prhDeadline } : {}), ...(prhBudgetMs ? { prhBudgetMs } : {}) });
+    const built = buildTextlintConfig(profile, cfg, { tmp, prhState, ...(prhDeadline ? { prhDeadline } : {}), ...(prhBudgetMs ? { prhBudgetMs } : {}) });
     warnings = built.warnings;
     const confPath = join(tmp, "textlintrc.json");
     writeFileSync(confPath, JSON.stringify(built.conf));
@@ -501,8 +529,10 @@ export function proofreadFiles(files, { cfg = loadProjectConfig(), profile, dead
   let lintError = null;
   const warnings = new Set();
   const disable = cfg.disable || [];
+  // prh の辞書の状態（記録が増えたか・確かめ終わらなかった規則・読み込みが時間切れになった辞書）は、すべての種類で1つを分け合う
+  const prhState = newPrhState();
   for (const [p, group] of byProfile) {
-    const tl = runTextlint(group, p, cfg, { deadline, prhDeadline, prhBudgetMs });
+    const tl = runTextlint(group, p, cfg, { deadline, prhDeadline, prhBudgetMs, prhState });
     if (!tl.ok) lintError = tl.lintError;
     for (const w of tl.warnings || []) warnings.add(w);
     const real = (p) => { try { return realpathSync(p); } catch { return resolve(p); } };
@@ -527,6 +557,8 @@ export function proofreadFiles(files, { cfg = loadProjectConfig(), profile, dead
       out.push({ file: abs, profile: p, findings });
     }
   }
+  // 時間内に確かめ終わらなかった規則の知らせは、すべての種類を見終えてから1回だけ作る
+  for (const w of prhPendingWarnings(prhState, prhBudgetMs)) warnings.add(w);
   recordHits(out);
   return { files: out, ok: !lintError, lintError, warnings: [...warnings], ledgerVersion: ledger.version };
 }

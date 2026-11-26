@@ -15,7 +15,7 @@ AI で書いた日本語の文書やスライドを校正する Claude Code の�
 
 ## 入れ方
 
-非公開リポジトリなので、先に git の認証（`gh auth login` と `gh auth setup-git`、または SSH 鍵）が要ります。
+公開リポジトリなので、GitHub の認証は要りません。GitHub の SSH の鍵を使っていない端末では、先に `export CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` を設定しておくと、セッションの中の `/plugin` からの追加や更新も HTTPS で取得できます（[docs/install-local.md](docs/install-local.md) の 1.）。
 
 ```bash
 claude plugin marketplace add andy0911/ja-doc-proofreading

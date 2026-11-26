@@ -747,7 +747,8 @@ t0 = performance.now();
 const v8 = safe(() => rs8.shapeProblem(manyAlt2, "u"));
 const manyShapeMs = Math.round(performance.now() - t0);
 ok(`選択肢1501個（\\p{Script=Greek} を含み、BMP の外まで当てる）の形の検査が2秒以内（${manyShapeMs}ms。0.1.5 では数分）`, v8 === null && manyShapeMs < 2000, JSON.stringify(v8) + manyShapeMs);
-const tooMany = "(?:" + Array.from({ length: 3000 }, (_, i) => String.fromCharCode(0x4e00 + i)).join("|") + "|\\p{Script=Greek})+";
+// 1文字そのものの選択肢はまとめて当てられるので軽く数える（0.1.7）。手間が上限を超えるのは、文字クラスの選択肢がとても多いもの
+const tooMany = "(?:" + Array.from({ length: 3000 }, (_, i) => `[${String.fromCharCode(0x4e00 + 2 * i)}${String.fromCharCode(0x4e01 + 2 * i)}]`).join("|") + "|\\p{Script=Greek})+";
 const tmData = tmp("jp-toomany-");
 process.env.JA_PROOFREAD_DATA = tmData;
 t0 = performance.now();
@@ -755,7 +756,7 @@ const tm1 = safe(() => checkRegexesCached([{ source: tooMany, flags: "u" }], { b
 const tmMs = Math.round(performance.now() - t0);
 const tm2 = safe(() => checkRegexesCached([{ source: tooMany, flags: "u" }], { budgetMs: 1 })) || [];
 if (outerEnvData === undefined) delete process.env.JA_PROOFREAD_DATA; else process.env.JA_PROOFREAD_DATA = outerEnvData;
-ok(`確かめる手間が上限を超える選択（選択肢3001個）は、時刻によらず「確かめきれない」と拒否して記録に残し、次は記録を使う（${tmMs}ms）`, tmMs < 2000 && /手間が上限/.test(tm1[0]?.[0] || "") && /手間が上限/.test(tm2[0]?.[0] || ""), tmMs + JSON.stringify(tm1) + JSON.stringify(tm2));
+ok(`確かめる手間が上限を超える選択（文字クラスの選択肢3001個）は、時刻によらず「確かめきれない」と拒否して記録に残し、次は記録を使う（${tmMs}ms）`, tmMs < 2000 && /手間が上限/.test(tm1[0]?.[0] || "") && /手間が上限/.test(tm2[0]?.[0] || ""), tmMs + JSON.stringify(tm1) + JSON.stringify(tm2));
 // 軽い規則から確かめる。重い規則で締め切りになっても、無害な規則は確かめ終え、記録が増えるので次の校正で進む
 const lightData = tmp("jp-light-");
 process.env.JA_PROOFREAD_DATA = lightData;
@@ -768,7 +769,7 @@ const nulls = (x) => x.filter((v) => v === null).length;
 ok("重い規則が先に並んでいても、後ろの無害な規則は1回目で確かめ終える", Array.isArray(l1[60]) && l1[60].length === 0 && nulls(l1) > 0, JSON.stringify(l1.slice(-2)) + nulls(l1));
 ok("確かめ終えたものが増えたときだけ progressed になり、次の校正では未確認が減る", l1.progressed === true && nulls(l2) < nulls(l1) && stuck[0] === null && stuck.progressed === false, `${l1.progressed} ${nulls(l1)} ${nulls(l2)} ${stuck.progressed}`);
 const libSrc = readFileSync(S("lib.mjs"), "utf8");
-ok("「次の校正で続きを確かめます」は、記録が増えたときだけ書く", /state\.progressed\s*\?\s*`[^`]*次の校正で続きを確かめます/.test(libSrc) && /results\.progressed\s*\?\s*`[^`]*次の校正で続きを確かめます/.test(libSrc));
+ok("「次の校正で続きを確かめます」は、記録が増えたときだけ書く（知らせは1か所で作る）", /state\.progressed\s*\?\s*`[^`]*次の校正で続きを確かめます/.test(libSrc) && (libSrc.match(/\?\s*`[^`]*次の校正で続きを確かめます/g) || []).length === 1);
 if (hasDeps) {
   const altDir2 = prhProj(`version: 1\nrules:\n  - expected: 多い語\n    pattern: /${manyAlt}/\n  - expected: 問い合わせ\n    pattern: 問合せ\n`);
   const altDoc2 = write(altDir2, "d.md", "# 窓口\n\n問合せは窓口で聞きます。\n");
@@ -804,6 +805,83 @@ ok("checkRegexes は例外を出さず、ほかの規則も確かめる", Array.
 const idScript = write(tmp("jp-idjs-"), "t.mjs", `const rs = await import(${JSON.stringify(pathToFileURL(S("regex-safety.mjs")).href)});\nconst a = rs.CHECKER_ID, ka = rs.regexKey("かぎのご", "u");\nawait import(${JSON.stringify(pathToFileURL(S("lib.mjs")).href)});\nconsole.log(JSON.stringify({ a, b: rs.CHECKER_ID, ka, kb: rs.regexKey("かぎのご", "u") }));\n`);
 const ids6 = json(run([idScript]).stdout);
 ok("lib.mjs を読み込むと CHECKER_ID と記録の鍵が変わる（lib.mjs 側の判定の版が入る）", ids6.a && ids6.b && ids6.a !== ids6.b && ids6.ka !== ids6.kb && /addJudgeVersion\(createHash\("sha256"\)\.update\(checkRegexesCached\.toString\(\)\)/.test(libSrc), JSON.stringify(ids6));
+
+// 22. 0.1.7 で直した不具合の再現
+// 1. u なしの \u{2} は「u を2回」なので、(?:\u{2}|u)+す は重なる選択（指数時間）。形の検査で拒否し、時間を測っても拒否する
+const NONU = String.raw`(?:\u{2}|u)+す`;
+const nonuShape = safe(() => rs8.checkShape(NONU, "")) || [];
+const nonuP = safe(() => [String.raw`(?:\p{L}|p)+す`, String.raw`(?:\P{L}|p)+す`].map((x) => rs8.shapeProblem(x, ""))) || [];
+const nonuU = safe(() => [rs8.shapeProblem(NONU, "u"), rs8.shapeProblem(String.raw`(?:\p{Script=Han}|ぽ)+`, "u")]) || [];
+ok("u なしの (?:\\u{2}|u)+す・(?:\\p{L}|p)+す・(?:\\P{L}|p)+す は、重なり得る選択として形の検査で拒否する（u つきは今までどおり通す）", /繰り返すグループの中に \|/.test(nonuShape[0] || "") && JSON.stringify(nonuP) === JSON.stringify(["alternation", "alternation"]) && JSON.stringify(nonuU) === JSON.stringify([null, null]), JSON.stringify({ nonuShape, nonuP, nonuU }));
+ok("u なしの \\u{0} は長さ0に一致し得ると数える", safe(() => rs8.minLength(String.raw`\u{0}`, "")) === 0 && safe(() => rs8.minLength(String.raw`\u{0}`, "u")) === 1);
+t0 = performance.now();
+const nonuMeasured = safe(() => rs8.measureRegexes([{ source: NONU, flags: "" }])) || [];
+const nonuMs = Math.round(performance.now() - t0);
+ok(`形の検査を通ったとしても、時間を測る見本（文字×40＋2バイトの文字）で (?:\\u{2}|u)+す を拒否する（${nonuMs}ms）`, Array.isArray(nonuMeasured[0]) && nonuMeasured[0].some((e) => /秒以内に終わりませんでした|ms かかりました/.test(e)) && safe(() => rs8.samplesFor(NONU, "").includes("u".repeat(40) + "￿")), JSON.stringify(nonuMeasured));
+{
+  const nRepo = tmp("jp-nonurepo-");
+  const nLedgerJs = makeRepo(nRepo);
+  const nPath = join(nRepo, "plugins/ja-proofread/data/ledger.json");
+  const nLedger = json(readFileSync(nPath, "utf8"));
+  const p1 = nLedger.patterns.find((p) => p.id === "P001");
+  p1.detect.pattern = NONU;
+  delete p1.detect.flags;
+  writeFileSync(nPath, JSON.stringify(nLedger));
+  r = run([nLedgerJs, "validate"], { timeout: 60000 });
+  ok("台帳に u なしの (?:\\u{2}|u)+す を書くと validate が拒否する", r.status === 1 && /P001/.test(r.stderr), r.stdout + r.stderr);
+}
+// 2. 1文字そのものの選択肢の手間は、まとめて当てる分（log n 程度）で見積もる。常用漢字相当2136字と😀の選択（u つき）を通す
+const joyo = "(?:" + Array.from({ length: 2136 }, (_, i) => String.fromCharCode(0x4e00 + i)).join("|") + "|😀)+です";
+t0 = performance.now();
+const joyoShape = safe(() => rs8.checkShape(joyo, "u"));
+const joyoMs = Math.round(performance.now() - t0);
+const joyoBad = "(?:" + Array.from({ length: 2136 }, (_, i) => String.fromCharCode(0x4e00 + i)).join("|") + "|一)+です";
+ok(`常用漢字相当2136字と😀の選択（u つき）は、確かめきれないとせず通す（${joyoMs}ms）。同じ字が2つあれば拒否する`, Array.isArray(joyoShape) && joyoShape.length === 0 && joyoMs < 3000 && safe(() => rs8.shapeProblem(joyoBad, "u")) === "alternation", JSON.stringify(joyoShape) + joyoMs);
+if (hasDeps) {
+  // 3. 1回の校正に doc と slide が混ざっても、確かめ終わらなかった規則の知らせは1つ、読み込みで止まる辞書の警告も1つ
+  const heavy = ["version: 1", "rules:"];
+  // prh は正規表現に gmu をつけるので、\p{…} は文字クラス。1件ごとに BMP の外まで当てて確かめるため、300件は数秒では確かめ終わらない
+  for (let i = 0; i < 300; i++) heavy.push(`  - expected: 重${i}`, `    pattern: /(?:\\p{Script=Han}|${String.fromCharCode(0x3041 + i)})+/`);
+  heavy.push("  - expected: 問い合わせ", "    pattern: 問合せ");
+  const mixDir = tmp("jp-mix-");
+  write(mixDir, "heavy.yml", heavy.join("\n") + "\n");
+  write(mixDir, "team.yml", "version: 1\nrules:\n" + SLOW_SPEC);
+  writeFileSync(join(mixDir, ".ja-proofread.json"), JSON.stringify({ prh: ["heavy.yml", "team.yml"], profiles: { "slides/**": "slide" } }));
+  const mixDoc = write(mixDir, "d.md", "# 窓口\n\n問合せは窓口で受けます。\n");
+  const mixSlide = write(mixDir, "slides/s.md", "# 窓口\n\n問合せは窓口で\n");
+  const mixData = tmp("jp-mixdata-");
+  symlinkSync(join(OUTER_DATA, "deps"), join(mixData, "deps"));
+  const mixRun = run([S("proofread.mjs"), "--json", mixDoc, mixSlide], { cwd: mixDir, env: { JA_PROOFREAD_DATA: mixData, JA_PROOFREAD_PRH_BUDGET_MS: "4000" }, timeout: 120000 });
+  const mixRep = json(mixRun.stdout);
+  const mw = mixRep.warnings || [];
+  const pendW = mw.filter((w) => /heavy\.yml の \d+件の規則は/.test(w));
+  const loadW = mw.filter((w) => /team\.yml を時間内に読み終えなかった/.test(w));
+  ok("doc と slide が混ざっても、確かめ終わらなかった規則の知らせは辞書ごとに1つで、「続きを確かめます」と「同じところで止まります」が同時に出ない", mixRep.files?.length === 2 && new Set(mixRep.files.map((f) => f.profile)).size === 2 && pendW.length === 1 && !(mw.some((w) => /次の校正で続きを確かめます/.test(w)) && mw.some((w) => /同じところで止まります/.test(w))), JSON.stringify(mw).slice(0, 600) + mixRun.stderr.slice(0, 200));
+  ok("specs で止まる辞書は、2つ目の種類では読み直さず、警告も1つだけ", loadW.length === 1, JSON.stringify(mw).slice(0, 600));
+  // 4. 後ろの辞書には最低限の時間（1つあたり2秒）だけを残し、見つからない辞書は数えない。警告にはその辞書に回せた時間を書く
+  const { buildTextlintConfig, PRH_DICT_MIN_MS } = await import(join(ROOT, "scripts/lib.mjs"));
+  const shareDir = tmp("jp-share-");
+  write(shareDir, "heavy.yml", heavy.join("\n") + "\n");
+  write(shareDir, "good.yml", "version: 1\nrules:\n  - expected: 問い合わせ\n    pattern: 問合せ\n");
+  const shareCfgPath = write(shareDir, ".ja-proofread.json", "{}");
+  const shareCfg = { path: shareCfgPath, prh: ["heavy.yml", "missing1.yml", "missing2.yml", "missing3.yml", "good.yml"] };
+  process.env.JA_PROOFREAD_DATA = tmp("jp-sharedata-");
+  symlinkSync(join(OUTER_DATA, "deps"), join(process.env.JA_PROOFREAD_DATA, "deps"));
+  t0 = performance.now();
+  const shared = safe(() => buildTextlintConfig("doc", shareCfg, { prhDeadline: performance.now() + 6000, prhBudgetMs: 6000 })) || { warnings: [] };
+  const shareMs = Math.round(performance.now() - t0);
+  if (outerEnvData === undefined) delete process.env.JA_PROOFREAD_DATA; else process.env.JA_PROOFREAD_DATA = outerEnvData;
+  const sw = shared.warnings.find((w) => /heavy\.yml の \d+件の規則は/.test(w)) || "";
+  const swSec = Number((/この辞書に回せた時間（([\d.]+)秒/.exec(sw) || [])[1]);
+  ok(`辞書が多くても、今の辞書には後ろの見つかる辞書の分（1つあたり${PRH_DICT_MIN_MS / 1000}秒）だけを残した時間を回し、警告にその時間を書く（${swSec}秒、${shareMs}ms）`, PRH_DICT_MIN_MS === 2000 && swSec >= 3.5 && swSec <= 4.1 && shared.conf?.rules?.prh?.rulePaths?.length >= 1, JSON.stringify(shared.warnings).slice(0, 600));
+}
+// 6. 形の検査を通った印（shape-ok:）は、最終の結果を記録したら消す
+{
+  const soData = tmp("jp-shapeok-");
+  const soScript = write(tmp("jp-shapeokjs-"), "t.mjs", `import { checkRegexesCached } from ${JSON.stringify(S("lib.mjs"))};\nimport { readFileSync } from "node:fs";\nimport { join } from "node:path";\nconst r = checkRegexesCached([{ source: "しるしのご(?:こ|お)", flags: "u" }]);\nconst data = JSON.parse(readFileSync(join(process.env.JA_PROOFREAD_DATA, "regex-checked.json"), "utf8"));\nconsole.log(JSON.stringify({ r, keys: Object.keys(data) }));\n`);
+  const so = json(run([soScript], { env: { JA_PROOFREAD_DATA: soData } }).stdout);
+  ok("形の検査を通った印（shape-ok:）は、最終の結果を記録したら消す", Array.isArray(so.r?.[0]) && so.r[0].length === 0 && so.keys?.length === 1 && !so.keys.some((k) => k.startsWith("shape-ok:")), JSON.stringify(so));
+}
 
 // 参考. 同梱の案内と、同梱したスキルの説明
 const nbProj = tmp("jp-nobak-");

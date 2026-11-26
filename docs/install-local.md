@@ -8,30 +8,20 @@
 |---|---|
 | Claude Code（`claude plugin` コマンドが使える版） | `claude --version` |
 | Node.js 20 以上と npm | `node -v` |
-| このリポジトリを読める git の認証 | 下の「1. 非公開リポジトリを読めるようにする」 |
+| git | `git --version`。このリポジトリは公開なので、GitHub の認証は要りません（下の「1. 取得のしかたを決める」） |
 | registry.npmjs.org に届くネットワーク | 初回に textlint を入れるため |
 
-## 1. 非公開リポジトリを読めるようにする
+## 1. 取得のしかたを決める
 
-このマーケットプレイスは非公開リポジトリです。Claude Code は自分ではトークンを持たず、手元の git の認証を使って取得します。`GITHUB_TOKEN` や `GH_TOKEN` を環境変数に入れるだけでは認証されません。
+このマーケットプレイスは公開リポジトリです。GitHub のアカウントや認証（`gh auth login`、トークンなど）は要りません。
 
-どちらか一方で設定します。
+`andy0911/ja-doc-proofreading` のような `owner/repo` の形で追加すると、Claude Code は先に `ssh -T git@github.com` で SSH を試し、通れば SSH で取得し、通らなければ HTTPS で取得します。公開リポジトリは、HTTPS なら認証なしで取得できます。ただし公式の説明では、ターミナルの `claude plugin install` は HTTPS に切り替えられても、セッションの中の `/plugin` からの追加と、プラグインの更新は切り替えません。GitHub の SSH の鍵を使っていない端末では、次を設定して、最初から HTTPS で取得します（[Serve users who have no git-host account](https://code.claude.com/docs/en/plugins/host-marketplace#serve-users-who-have-no-git-host-account)）。
 
 ```bash
-# A. GitHub CLI を使う（おすすめ）
-gh auth login
-gh auth setup-git
-
-# B. SSH 鍵を使う
-ssh -T git@github.com
+export CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1
 ```
 
-Claude Code は git を、パスフレーズや確認の入力を求めない設定で動かします。そのため、どちらの方法も「入力なしで通る」状態にしておきます。
-
-- A の HTTPS：認証ヘルパーに資格情報が保存されていること。保存されていれば使われ、入力を求めるヘルパーは失敗します。`gh auth login` のあと `gh auth setup-git` で保存されます
-- B の SSH：パスフレーズを聞かれずに使える鍵であること（パスフレーズつきの鍵なら、先に `ssh-add` で ssh-agent に入れておき、`ssh-add -l` に表示されるのを確かめる）。あわせて、`~/.ssh/known_hosts` に github.com があること（一度 `ssh -T git@github.com` を実行して、ホストの確認に答えておく）
-
-`andy0911/ja-doc-proofreading` のような `owner/repo` の形で追加すると、Claude Code は先に `ssh -T git@github.com` で SSH を試し、通れば SSH で取得します。その確認か SSH での取得そのものが失敗すると、HTTPS に切り替えて取得します。そのため、SSH の鍵が使えなくても、A の設定があれば取得できます。SSH を試さず最初から HTTPS にしたいときは `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` を設定します（[Grant access to a private marketplace](https://code.claude.com/docs/en/plugins/host-marketplace#grant-access-to-a-private-marketplace)、[Add a private marketplace](https://code.claude.com/docs/en/plugins/install.md#add-a-private-marketplace)）。
+GitHub の SSH の鍵を使っている端末で SSH のまま取得するときは、その鍵がパスフレーズを聞かれずに使えること（パスフレーズつきなら `ssh-add` で ssh-agent に入れておく）と、`~/.ssh/known_hosts` に github.com があることを確かめます。Claude Code は git を、入力を求めない設定で動かすためです（[Add a private marketplace](https://code.claude.com/docs/en/plugins/install.md#add-a-private-marketplace) の SSH の条件）。
 
 ## 2. マーケットプレイスを追加して、プラグインを入れる
 
@@ -117,7 +107,7 @@ claude plugin marketplace update ja-doc-proofreading
 claude plugin update ja-proofread@ja-doc-proofreading
 ```
 
-自動で更新したいときは、`/plugin` の Marketplaces タブで、このマーケットプレイスの自動更新をオンにします。自動更新は、対話セッションで最初のメッセージを送ったあと、最大10分ほど待ってから行われます。更新されても、動いているセッションは読み込んだ版のままなので、`Run /reload-plugins to apply` と出たら `/reload-plugins` を実行するか、次に起動したときに新しい版が使われます（[Plugin loading reference](https://code.claude.com/docs/en/plugins/loading.md#when-auto-update-runs)）。自動更新（裏で動く更新）は、入力を求めない認証しか使えません。HTTPS なら `gh auth setup-git` などで資格情報を保存した認証ヘルパー、SSH なら ssh-agent に鍵を入れ、github.com を `known_hosts` に入れておきます。`GITHUB_TOKEN` だけでは、自動更新は認証されません。認証が通らないときは、更新は黙って失敗し、前の版のまま動きます（[What background auto-update does with credentials](https://code.claude.com/docs/en/plugins/host-marketplace#what-background-auto-update-does-with-credentials)）。
+自動で更新したいときは、`/plugin` の Marketplaces タブで、このマーケットプレイスの自動更新をオンにします。自動更新は、対話セッションで最初のメッセージを送ったあと、最大10分ほど待ってから行われます。更新されても、動いているセッションは読み込んだ版のままなので、`Run /reload-plugins to apply` と出たら `/reload-plugins` を実行するか、次に起動したときに新しい版が使われます（[Plugin loading reference](https://code.claude.com/docs/en/plugins/loading.md#when-auto-update-runs)）。このリポジトリは公開なので、HTTPS で取得したときの自動更新に認証は要りません。SSH で取得したときは、自動更新（裏で動く更新）も入力を求めずに動く必要があるので、鍵を ssh-agent に入れておきます。取得できないときは、更新は黙って失敗し、前の版のまま動きます（[What background auto-update does with credentials](https://code.claude.com/docs/en/plugins/host-marketplace#what-background-auto-update-does-with-credentials)）。
 
 環境変数 `DISABLE_UPDATES=1`、`DISABLE_AUTOUPDATER=1`、`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1` のどれかを設定していると、プラグインの自動更新はまるごと止まり、`/plugin` の自動更新のスイッチも出ません。これらを設定したままプラグインだけ自動で更新したいときは、`FORCE_AUTOUPDATE_PLUGINS=1` も設定します。これらの変数はプラグイン以外にも効くので、ほかへの影響は [Environment variables](https://code.claude.com/docs/en/env-vars) で確かめます（[Which marketplaces and plugins auto-update](https://code.claude.com/docs/en/plugins/loading#which-marketplaces-and-plugins-auto-update)）。
 
@@ -144,29 +134,45 @@ claude plugin install ja-proofread@ja-doc-proofreading --scope project
 
 入れたあと、新しいセッションを始めるか、`/reload-plugins` を実行すると読み込まれます。すべてのプロジェクトで使うなら `--scope project` の代わりに `--scope user` で入れます。入れずに今のセッションだけで試すなら、`/reload-plugins` でも読み込めます。このプラグインはマーケットプレイスの中に相対パスで置いてあるためで、読み込まれるのはそのセッションだけです（同じ Enabled in project settings but not installed）。入れていないときは、`/plugin` の Errors タブに `isn't installed here` で終わる行が出ます。
 
-仲間はそれぞれ「1. 非公開リポジトリを読めるようにする」を先に済ませておきます。マーケットプレイスが登録されないとき（フォルダーを信頼していない、認証が通らないなど）は、先に `claude plugin marketplace add andy0911/ja-doc-proofreading` を実行してから、上の install を実行します。
+GitHub の SSH の鍵を使っていない仲間は、「1. 取得のしかたを決める」の `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` を先に設定しておきます。マーケットプレイスが登録されないとき（フォルダーを信頼していない、取得できないなど）は、先に `claude plugin marketplace add andy0911/ja-doc-proofreading` を実行してから、上の install を実行します。
 
 ## 8. やめる
 
+### プロジェクトで仲間と共有しているとき（`--scope project` で入れた、7. で共有した）
+
+自分の分だけを止めます。`claude plugin uninstall ja-proofread@ja-doc-proofreading` は、プロジェクトで有効にしたプラグインには使えず、`enabled at project scope (.claude/settings.json, shared with your team)` と出て失敗します。次のどちらかで、自分だけ無効にします。
+
+```bash
+claude plugin disable ja-proofread@ja-doc-proofreading --scope local
+```
+
+Claude Code の中なら、`/plugin` の Installed タブからこのプラグインを選んで Uninstall を選び、「Disable for me」を選んでも同じです。どちらも自分の `.claude/settings.local.json` に無効と書かれ、プロジェクトには入ったままになります（[Uninstall a plugin the project enables](https://code.claude.com/docs/en/plugins/install#uninstall-a-plugin-the-project-enables)、[plugin disable](https://code.claude.com/docs/en/plugins/cli-reference#plugin-disable)）。
+
+共有しているときは、`claude plugin marketplace remove ja-doc-proofreading` を実行しないでください。`--scope` をつけないと、すべてのスコープからこのマーケットプレイスの宣言を消し、共有の `.claude/settings.json` の `extraKnownMarketplaces` からも消えます。最後のスコープから消えると、このマーケットプレイスから入れたプラグインもすべて外れ、そのデータ置き場も消えます（[plugin marketplace remove](https://code.claude.com/docs/en/plugins/cli-reference#plugin-marketplace-remove)）。
+
+プロジェクトの全員でやめるときだけ、`claude plugin uninstall ja-proofread@ja-doc-proofreading --scope project` を実行し（`/plugin` なら「Uninstall for everyone」）、変わった `.claude/settings.json` をコミットします。共有の `.claude/settings.json` からこのプラグインが消えるので、仲間の分も止まります。
+
+### 自分だけで使っているとき（`--scope user` か `--scope local` で入れた）
+
 ```bash
 claude plugin uninstall ja-proofread@ja-doc-proofreading
+```
+
+`local` で入れたときは `--scope local` をつけて外します。ほかにこのマーケットプレイスを使わないなら、続けてマーケットプレイスも消します。
+
+```bash
 claude plugin marketplace remove ja-doc-proofreading
 ```
 
-`local` で入れたときは `--scope local` をつけて外します。
-
-`claude plugin marketplace remove` は、`--scope` をつけないと、すべてのスコープからこのマーケットプレイスの宣言を消します。共有の `.claude/settings.json` の `extraKnownMarketplaces`（7. で仲間と共有したもの）からも消えます。最後のスコープから消えると、このマーケットプレイスから入れたプラグインもすべて外れ、そのデータ置き場も消えます（[plugin marketplace remove](https://code.claude.com/docs/en/plugins/cli-reference#plugin-marketplace-remove)）。プロジェクトで仲間と共有しているときは、`marketplace remove` の行は実行しないでください。自分の分を外すだけなら、uninstall の行で足ります。
-
-`--scope project` で入れたときは注意します。`claude plugin uninstall ja-proofread@ja-doc-proofreading --scope project` は、共有の（コミットする）`.claude/settings.json` からこのプラグインを消すので、仲間の分まで止まります。自分だけ止めたいときは、Claude Code の中で `/plugin` の Installed タブからこのプラグインを選んで Uninstall を選び、「Disable for me」を選びます。自分の `.claude/settings.local.json` に無効と書かれ、プロジェクトには入ったままになります（[Uninstall a plugin the project enables](https://code.claude.com/docs/en/plugins/install#uninstall-a-plugin-the-project-enables)）。プロジェクトの全員でやめるときだけ、`--scope project` の uninstall を使い、変わった `.claude/settings.json` をコミットします。
-
-最後のスコープから外すと、データ置き場（依存、検出の記録、誤検知の記録）も消えます。残したいときは `--keep-data` をつけます。
+最後のスコープから外すと、データ置き場（依存、検出の記録、誤検知の記録）も消えます。残したいときは、uninstall に `--keep-data` をつけます。
 
 ## 困ったとき
 
 | 起きたこと | 確かめること |
 |---|---|
-| マーケットプレイスを追加できない | `gh auth status`、または `ssh -T git@github.com`。リポジトリを読む権限があるか |
+| マーケットプレイスを追加できない・更新できない | github.com に届くか。GitHub の SSH の鍵を使っていなければ `CLAUDE_CODE_PLUGIN_PREFER_HTTPS=1` を設定したか。SSH で取得するなら `ssh -T git@github.com` が入力なしで通るか |
 | 「textlint の依存がまだ入っていません」と出る | 「5. スクリプトを手で動かすとき」のとおり `JA_PROOFREAD_DATA` を設定して `ensure-deps.mjs` を実行し、npm のエラーを見る |
 | 「textlint が動かなかった」と出る | textlint の指摘は確かめられていません。表示されたエラーを見て、`ensure-deps.mjs` で入れ直す |
 | 書いても自動チェックが動かない | `.ja-proofread.json` がプロジェクトの直下にあるか、JSON として読めるか。そのファイルのパス（`.ja-proofread.json` のある場所からの相対パス）が `include` のどれかの glob に合い、`exclude` に合っていないか。例の設定の `include` は `docs/` と `slides/` の下だけです |
 | 指摘が多すぎる | スライドなら `profile` を `slide` に。効かない型は `disable` に入れ、grow-ledger スキルで誤検知を記録する |
+| 「prh の辞書 … 確かめ終わらなかったため外しました」と出る | チームの prh 辞書を確かめる時間の上限は、環境変数 `JA_PROOFREAD_PRH_BUDGET_MS`（ミリ秒。既定 20000、下限 1000）で変えられます。書いた直後のフックでは、フックの締め切り（60秒）から textlint の分を残した時間までしか使いません。辞書が多いときは、後ろの辞書に1つあたり2秒を残し、残りを前の辞書から使います |

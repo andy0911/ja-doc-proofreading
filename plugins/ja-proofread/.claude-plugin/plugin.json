@@ -1,7 +1,7 @@
 {
   "name": "ja-proofread",
   "displayName": "日本語文書の校正（AIっぽさ対策）",
-  "version": "0.1.6",
+  "version": "0.1.7",
   "description": "AIで書いた日本語文書を、書く前・書いた直後・仕上げの3段階で校正する。仕上げでは textlint、独立レビュー、読者役テストを使う。見つけた新しい型は Notion で本人が承認してから台帳に足し、版を上げて配る。",
   "author": { "name": "andy" },
   "keywords": ["japanese", "proofreading", "textlint", "ai-writing", "style"]
