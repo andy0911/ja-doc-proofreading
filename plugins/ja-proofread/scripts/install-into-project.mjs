@@ -135,8 +135,9 @@ if (remove) {
 // 1. 本体（スクリプト・ルール・台帳・設定・テンプレート）
 mkdirSync(vendorDir, { recursive: true });
 for (const d of ["scripts", "rules", "config", "data", "templates", ".claude-plugin"]) {
-  // build-setup.mjs（dist の一式を作るスクリプト）は、同梱先では使わないので入れない
-  cpSync(join(ROOT, d), join(vendorDir, d), { recursive: true, filter: (src) => relative(ROOT, src) !== join("scripts", "build-setup.mjs") });
+  // build-setup.mjs（dist の一式を作る）と install-project-kit.mjs（Projects 向けの kit を書く）は、同梱先では使わないので入れない
+  const notVendored = new Set([join("scripts", "build-setup.mjs"), join("scripts", "install-project-kit.mjs")]);
+  cpSync(join(ROOT, d), join(vendorDir, d), { recursive: true, filter: (src) => !notVendored.has(relative(ROOT, src)) });
 }
 for (const f of ["package.json", "package-lock.json"]) if (existsSync(join(ROOT, f))) cpSync(join(ROOT, f), join(vendorDir, f));
 

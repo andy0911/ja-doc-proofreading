@@ -2,7 +2,7 @@
 // 利用者の記録を汚さないよう、データ置き場は一時ディレクトリにする（依存だけは入れたものをリンクして使う）
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, cpSync, mkdirSync, symlinkSync, statSync, rmSync, readdirSync, lstatSync } from "node:fs";
-import { join, resolve, dirname } from "node:path";
+import { join, resolve, dirname, basename } from "node:path";
 import { tmpdir, homedir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
@@ -922,7 +922,7 @@ ok("同梱したスキルに、プラグインのデータ置き場の説明が�
   ok("フックのコマンドは $CLAUDE_PROJECT_DIR/.claude/ja-proofread/scripts/ を指す", cmds.length === 2 && cmds.every((c) => c.includes('"$CLAUDE_PROJECT_DIR/.claude/ja-proofread/scripts/')), cmds.join(" | "));
   const addLine = r.stdout.split("\n").find((l) => l.includes("git add ")) || "";
   ok("最後に、同梱したものの名前だけのコミットするパスと git add … && git commit … && git push -u origin HEAD の例を出す", /コミットするパス：\.claude\/ja-proofread \.claude\/skills\/ja-proofread-grow-ledger /.test(r.stdout) && /git add \.claude\/ja-proofread .*\.ja-proofread\.json && git commit -m "ja-proofread を同梱" && git push -u origin HEAD$/.test(addLine) && !addLine.includes("ja-proofread-*") && (r.stdout.match(/コミットするパス：/g) || []).length === 1 && /新しいセッションを始めて/.test(r.stdout), r.stdout);
-  ok("同梱に build-setup.mjs は入らない（一式にも install-into-project の同梱にも）", !existsSync(join(viaSetup, ".claude/ja-proofread/scripts/build-setup.mjs")) && !existsSync(join(viaInstall, ".claude/ja-proofread/scripts/build-setup.mjs")) && existsSync(join(viaSetup, ".claude/ja-proofread/scripts/install-into-project.mjs")) && !run([DIST, "--list"]).stdout.includes("build-setup.mjs"));
+  ok("同梱に build-setup.mjs と install-project-kit.mjs は入らない（一式で同梱しても install-into-project で同梱しても）。一式は build-setup.mjs を持たない", ["build-setup.mjs", "install-project-kit.mjs"].every((f) => !existsSync(join(viaSetup, ".claude/ja-proofread/scripts", f)) && !existsSync(join(viaInstall, ".claude/ja-proofread/scripts", f))) && existsSync(join(viaSetup, ".claude/ja-proofread/scripts/install-into-project.mjs")) && !run([DIST, "--list"]).stdout.includes("build-setup.mjs"));
   write(viaSetup, "doc.md", readFileSync(join(ROOT, "tests/fixtures/ai-like.md"), "utf8"));
   const hr = run([join(viaSetup, ".claude/ja-proofread/scripts/hook-post-edit.mjs")], { input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: join(viaSetup, "doc.md") }, cwd: viaSetup }), env: { CLAUDE_PROJECT_DIR: viaSetup } });
   ok("一式で同梱したフックが動き、必ず直す指摘を返す", /"decision":"block"/.test(hr.stdout) && /必ず直す [1-9]/.test(hr.stdout), hr.stdout.slice(0, 200) + hr.stderr);
@@ -985,6 +985,55 @@ ok("同梱したスキルに、プラグインのデータ置き場の説明が�
   ok("build-setup.mjs は git の外では止め、何も書かない", r.status === 1 && /git ls-files/.test(r.stderr) && !existsSync(join(nRepo, "out")), r.stderr);
   r = run([DIST, "--version"]);
   ok("一式の版は plugin.json と同じ", r.stdout.trim() === json(readFileSync(join(ROOT, ".claude-plugin/plugin.json"), "utf8")).version, r.stdout);
+}
+
+// 21. Projects 向けの kit（--project-kit。リポジトリなしで、/mnt/project-files のような所に一式と手順と指示を書く）
+{
+  const DIST = resolve(ROOT, "..", "..", "dist", "ja-proofread-setup.mjs");
+  const pf = tmp("jp-kitpf-");
+  const kit = join(pf, "ja-proofread-kit");
+  const kdata = join(pf, "ja-proofread-data");
+  r = run([DIST, "--project-kit", kit], { env: { GIT_CEILING_DIRECTORIES: pf } });
+  const allFiles = (d) => { const out = []; const walk = (x) => { for (const n of readdirSync(x)) { const p = join(x, n); out.push(p); if (statSync(p).isDirectory()) walk(p); } }; walk(d); return out; };
+  ok("--project-kit は git の作業コピーでなくても kit を書く", r.status === 0 && existsSync(join(kit, "kit.json")) && existsSync(join(kit, "PROJECT-INSTRUCTIONS.md")) && existsSync(join(kit, "scripts/proofread.mjs")) && existsSync(join(kit, "rules/ledger-patterns.js")) && existsSync(join(kit, "agents/structure-reviewer.md")) && existsSync(join(kit, "skills/proofread/SKILL.md")), r.stdout.slice(0, 300) + r.stderr);
+  ok("kit に隠しファイルと、kit では使わないスクリプト（同梱・kit・dist・フック）を書かない", safe(() => !allFiles(kit).some((p) => basename(p).startsWith(".")) && ["build-setup.mjs", "install-into-project.mjs", "install-project-kit.mjs", "hook-post-edit.mjs"].every((f) => !existsSync(join(kit, "scripts", f)))));
+  const kj = json(readFileSync(join(kit, "kit.json"), "utf8"));
+  ok("kit.json に版と記録の置き場（kit の隣の ja-proofread-data）がある", kj.name === "ja-proofread-kit" && kj.version === json(readFileSync(join(ROOT, ".claude-plugin/plugin.json"), "utf8")).version && resolve(kit, kj.data) === kdata, JSON.stringify(kj));
+  const ksk = ["write", "proofread", "grow-ledger"].map((n) => readFileSync(join(kit, "skills", n, "SKILL.md"), "utf8")).join("\n");
+  const kpaths = [...ksk.matchAll(new RegExp(kit.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "(/[^\\s\"`）)]+)", "g"))].map((m) => kit + m[1]);
+  ok("kit の手順の本文に、プラグイン用の変数とプラグインだけの案内が残らず、指すファイルが実在する", !ksk.includes("${CLAUDE_") && !ksk.includes("plugin-only") && !/JA_PROOFREAD_DATA=/.test(ksk) && !/ja-proofread:(structure-reviewer|fresh-eyes-reader)/.test(ksk) && kpaths.length >= 5 && kpaths.every((p) => existsSync(p)), kpaths.filter((p) => !existsSync(p)).join(","));
+  ok("kit の proofread の手順は、サブエージェントを Agent ツールで起動し、kit の agents の本文を渡す", /Agent ツールで起動し、`[^`]*\/agents\/structure-reviewer\.md` の本文/.test(ksk) && /\/agents\/fresh-eyes-reader\.md` の本文/.test(ksk));
+  const pi = readFileSync(join(kit, "PROJECT-INSTRUCTIONS.md"), "utf8");
+  const paste = (pi.split("<!-- 貼る部分ここから -->\n")[1] || "").split("\n<!-- 貼る部分ここまで -->")[0];
+  ok("PROJECT-INSTRUCTIONS.md の貼る部分は3,000字以下で、毎回の ensure-deps と proofread、手順の本文、記録の置き場を kit の場所で書く", paste.length > 500 && [...paste].length <= 3000 && paste.includes(`node "${kit}/scripts/ensure-deps.mjs"`) && paste.includes(`node "${kit}/scripts/proofread.mjs" <ファイル>`) && ["write", "proofread", "grow-ledger"].every((n) => paste.includes(`${kit}/skills/${n}/SKILL.md`)) && paste.includes(kdata) && /本人が頼んだときだけ/.test(paste) && r.stdout.includes(paste), [...paste].length);
+  // 空の HOME・既定のデータ置き場（環境変数なし）で動く。依存は ~/.cache の下、記録は kit の隣に残る
+  const khome = tmp("jp-kithome-");
+  mkdirSync(join(khome, ".cache/ja-proofread"), { recursive: true });
+  if (existsSync(join(OUTER_DATA, "deps"))) symlinkSync(join(OUTER_DATA, "deps"), join(khome, ".cache/ja-proofread/deps"));
+  const kenv = { ...BASE_ENV, HOME: khome };
+  delete kenv.JA_PROOFREAD_DATA; delete kenv.XDG_CACHE_HOME;
+  const krun = (a) => spawnSync(process.execPath, a, { encoding: "utf8", cwd: WORK, env: kenv });
+  const kdoc = write(tmp("jp-kitdoc-"), "doc.md", readFileSync(join(ROOT, "tests/fixtures/ai-like.md"), "utf8"));
+  r = krun([join(kit, "scripts/ensure-deps.mjs")]);
+  const kr = krun([join(kit, "scripts/proofread.mjs"), kdoc]);
+  ok("kit の ensure-deps と proofread が動き、必ず直す指摘を返し、検出の記録を kit の隣の ja-proofread-data に残す", r.status === 0 && /必ず直す [1-9]/.test(kr.stdout) && existsSync(join(kdata, "hits.jsonl")) && !existsSync(join(kdata, "deps")), kr.stdout.slice(0, 200) + kr.stderr);
+  krun([join(kit, "scripts/ledger.mjs"), "fp", "P002", "--text", "x", "--reason", "テスト"]);
+  ok("kit で記録した誤検知も ja-proofread-data に残る", existsSync(join(kdata, "false-positives.jsonl")));
+  // 上書き（版の更新）、ほかのファイルは残す、kit でない空でないディレクトリには書かない、--remove
+  write(kit, "mine.txt", "利用者のメモ\n");
+  writeFileSync(join(kit, "scripts/old.mjs"), "// 前の版の残り\n");
+  r = run([DIST, "--project-kit", kit]);
+  ok("kit をもう一度書くと入れ替え、前の版の残りは消え、利用者のファイルは残る", r.status === 0 && !existsSync(join(kit, "scripts/old.mjs")) && existsSync(join(kit, "mine.txt")) && existsSync(join(kit, "scripts/proofread.mjs")), r.stderr);
+  r = run([DIST, "--project-kit", pf]);
+  ok("kit でない、空でないディレクトリには何も書かずに止める", r.status === 1 && /kit（kit.json）でもない/.test(r.stderr) && !existsSync(join(pf, "kit.json")), r.stderr);
+  r = run([DIST, "--project-kit", kit, "--remove"]);
+  ok("--project-kit … --remove で kit の分だけ消し、利用者のファイルと記録の置き場は残す", r.status === 0 && readdirSync(kit).join(",") === "mine.txt" && existsSync(join(kdata, "hits.jsonl")), readdirSync(kit).join(",") + r.stderr);
+  const asKit = join(tmp("jp-kitas-"), "kit");
+  r = run([DIST, "--project-kit", asKit, "--as", "/mnt/project-files/ja-proofread-kit"]);
+  const asText = ["PROJECT-INSTRUCTIONS.md", "skills/proofread/SKILL.md"].map((f) => readFileSync(join(asKit, f), "utf8")).join("\n");
+  ok("--as を付けると、手元で作った kit の手順と指示のパスを使う場所で書く（アップロード向け）", r.status === 0 && asText.includes('node "/mnt/project-files/ja-proofread-kit/scripts/proofread.mjs"') && asText.includes("/mnt/project-files/ja-proofread-data") && !asText.includes(asKit), r.stderr);
+  r = run([DIST, "--project-kit", join(pf, "none"), "--remove"]);
+  ok("kit が無いときの --remove は何も変えずに終える", r.status === 0 && /kit はありません/.test(r.stdout) && !existsSync(join(pf, "none")), r.stdout + r.stderr);
 }
 
 // 12. 一時ディレクトリを残さない（このテストが作ったものは、ここで消す）

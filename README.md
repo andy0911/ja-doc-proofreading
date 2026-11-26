@@ -24,6 +24,7 @@ claude plugin install ja-proofread@ja-doc-proofreading --scope user
 
 - 手元の Claude Code：[docs/install-local.md](docs/install-local.md)
 - クラウドセッション：[docs/install-cloud.md](docs/install-cloud.md)
+- claude.ai/code の Projects（リポジトリがなくてもよい）：[docs/install-projects.md](docs/install-projects.md)
 
 クラウドセッション（claude.ai/code）には、上のコマンドで入れたプラグインは持ち込まれません。校正したいリポジトリを1つだけ選んでセッションを始め、その中で次の1行を実行し（Claude に頼んでもよい）、表示されたコマンド（`git add … && git commit … && git push -u origin HEAD`）でコミットしてプッシュしてから、新しいセッションを始めます。手元にプラグインを入れていなくても済みます。版の固定や sha256 の確かめ方、手元からの同梱、やめ方は [docs/install-cloud.md](docs/install-cloud.md) の方法Aです。同梱すると、同梱先のリポジトリに Notion の候補一覧の場所が載ります。候補一覧の中身は Notion の共有設定で守られますが、場所を知られたくないリポジトリ（公開・社外共有など）には同梱しないでください。
 
@@ -32,6 +33,8 @@ curl -fsSLo /tmp/ja-proofread-setup.mjs https://raw.githubusercontent.com/andy09
 ```
 
 claude.ai/customize/plugins でアカウントにマーケットプレイスを足す方法は、持ち主の環境では追加ができなかったので、参考として [docs/install-cloud.md](docs/install-cloud.md) の B1 に回しています。
+
+claude.ai/code の Projects では、プロジェクトのどれかのスレッドで上の1行の最後に `--project-kit /mnt/project-files/ja-proofread-kit` を足して実行し、表示された「貼る部分」をプロジェクト指示（Project settings > Memory > Project instructions）に貼ります。新しいスレッドから、書いた・直した文書を毎回校正するようになります。フックの代わりにプロジェクト指示で頼むので、Claude が飛ばすことがあります。詳しくは [docs/install-projects.md](docs/install-projects.md) です。
 
 新しい版が出たら、次を実行して Claude Code を起動し直します（起動中のセッションなら `/reload-plugins` でも反映できます）。このマーケットプレイスは自動更新が既定でオフです。
 

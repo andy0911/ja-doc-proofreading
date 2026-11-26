@@ -10,13 +10,15 @@ curl -fsSLo /tmp/ja-proofread-setup.mjs https://raw.githubusercontent.com/andy09
 
 手元の Claude Code で使うなら [install-local.md](install-local.md) です。claude.ai/customize/plugins でアカウントにプラグインを足す方法は、公式の説明ではクラウドセッションにも読み込まれるとされていますが、持ち主の環境では、その画面でこのマーケットプレイスの追加ができなかったので、主な手順にはせず参考に回しています（下の B1）。
 
+claude.ai/code の Projects で使うなら、リポジトリがあってもなくても、[install-projects.md](install-projects.md) の kit（`/mnt/project-files` に一式を書き、プロジェクト指示で毎回の校正を頼む）が主な手順です。
+
 ## 先に、どこで動くか
 
 | 使う場所 | このプラグインの使い方 | 確かめた程度 |
 |---|---|---|
 | claude.ai/code で、リポジトリを1つだけ選んだセッション | 方法A（セッションの中で一式を入れてコミットする） | クラウドのコンテナの中で、一式を入れた一時リポジトリに `claude -p` を動かし、スキルとサブエージェントが見え、Write の後にフックの指摘が返ることを確認。claude.ai/code で新しく始めたセッションそのものでは未確認 |
 | claude.ai/code で、リポジトリを複数選んだセッション | 方法A。ただしフックは動かない（※） | 未確認 |
-| claude.ai の Projects のスレッドで、クラウドで動くもの（Projects は Pro・Max・Ultra のプランだけ） | 方法Aで同梱すれば、スキルとサブエージェントは使える見込み。フックは動かないので書いた直後の自動校正はなく、依存は proofread スキルの準備（`ensure-deps.mjs`）で入る（※） | 未確認 |
+| claude.ai の Projects のスレッドで、クラウドで動くもの（Projects は Pro・Max・Ultra のプランだけ） | [install-projects.md](install-projects.md) の kit（`--project-kit`）とプロジェクト指示。リポジトリがあれば、方法Aで同梱してスキルとサブエージェントを使う手もある（フックは動かないので書いた直後の自動校正はなく、依存は proofread スキルの準備（`ensure-deps.mjs`）で入る。※） | kit：Projects のクラウドのスレッドの中で、kit を書き、空の HOME で校正が動くことと、貼る部分を渡した `claude -p` が書いた文書を校正して直すことを確認。プロジェクト指示に貼った新しいスレッドでは未確認。同梱：未確認 |
 | claude.ai のアカウントにプラグインを足したとき（claude.ai/customize/plugins） | 公式の説明では、クラウドセッションと、Projects のクラウドで動くスレッドに読み込まれる（下の B1。参考） | 持ち主の環境では、claude.ai/customize/plugins でこのマーケットプレイスの追加ができなかった |
 | claude.ai の Projects のスレッドで、自分のコンピューターで動かすもの（Remote Control） | そのコンピューターの Claude Code が動くので、手元に入れたプラグインか、方法Aで同梱したリポジトリが使える見込み（下の B4） | 未確認 |
 
@@ -26,7 +28,7 @@ curl -fsSLo /tmp/ja-proofread-setup.mjs https://raw.githubusercontent.com/andy09
 
 そのため、手元のプラグインの写し（`~/.claude/plugins/marketplaces/...`）から動かす `install-into-project.mjs` は、クラウドセッションの中では使えません。また、GitHub のプロキシは、セッションに付いていないリポジトリへの API と、`github.com/…/archive/`・`codeload.github.com` からの取得を、公開リポジトリでも 403 にします（[GitHub proxy](https://code.claude.com/docs/en/cloud-environments#github-proxy)）。このマーケットプレイスのリポジトリをセッションの中でクローンすることも、通らない見込みです。一方、公開リポジトリのファイルは raw.githubusercontent.com から取れ、このドメインは既定の許可リストに入っています（同じ GitHub proxy の項と [Default allowed domains](https://code.claude.com/docs/en/cloud-environments#default-allowed-domains)）。そこで方法Aでは、同梱に要るファイルを1つにまとめた `dist/ja-proofread-setup.mjs` をそこから取ります。
 
-Projects のスレッドのうちクラウドで動くものも、リポジトリの `CLAUDE.md`、`.claude/CLAUDE.md`、`.claude/rules/` に加えて、`.claude/` の下のスキル・サブエージェント・コマンドを読みます。読まないのは、`.mcp.json` と、`.claude/settings.json` のフック・権限の規則・`env` です（[What threads pick up from your repositories](https://code.claude.com/docs/en/claude-projects#what-threads-pick-up-from-your-repositories)）。ただし、2026年10月1日より前に始めたスレッド、名前がドットで始まるリポジトリ（`.github` など）を含むスレッド、セルフホスト（self-hosted）の環境のスレッドなどは、スキル・サブエージェント・コマンドも読みません（[Threads that skip repository skills](https://code.claude.com/docs/en/claude-projects#threads-that-skip-repository-skills)。セルフホストの環境では、スキル・サブエージェント・コマンドをランナーのイメージに入れます）。そのため、方法Aで同梱すれば、スキルとサブエージェントは使える見込みです。フックは動かないので、書いた直後の自動校正はありません。依存は、proofread スキルの準備（`ensure-deps.mjs`）で入ります（未確認）。自分のコンピューターで動かすスレッドは別で、下の B4 を見てください。
+Projects のスレッドのうちクラウドで動くものも、リポジトリの `CLAUDE.md`、`.claude/CLAUDE.md`、`.claude/rules/` に加えて、`.claude/` の下のスキル・サブエージェント・コマンドを読みます。読まないのは、`.mcp.json` と、`.claude/settings.json` のフック・権限の規則・`env` です（[What threads pick up from your repositories](https://code.claude.com/docs/en/claude-projects#what-threads-pick-up-from-your-repositories)）。ただし、2026年10月1日より前に始めたスレッド、名前がドットで始まるリポジトリ（`.github` など）を含むスレッド、セルフホスト（self-hosted）の環境のスレッドなどは、スキル・サブエージェント・コマンドも読みません（[Threads that skip repository skills](https://code.claude.com/docs/en/claude-projects#threads-that-skip-repository-skills)。セルフホストの環境では、スキル・サブエージェント・コマンドをランナーのイメージに入れます）。そのため、方法Aで同梱すれば、スキルとサブエージェントは使える見込みです。フックは動かないので、書いた直後の自動校正はありません。依存は、proofread スキルの準備（`ensure-deps.mjs`）で入ります（未確認）。書いた直後の校正もさせたいとき、プロジェクトにリポジトリがないときは、[install-projects.md](install-projects.md) の kit とプロジェクト指示を使います。自分のコンピューターで動かすスレッドは別で、下の B4 を見てください。
 
 ## 方法A：リポジトリに同梱する
 
@@ -124,7 +126,7 @@ cd <対象のリポジトリ> && git add .claude/ja-proofread .claude/skills/ja-
 3. 最初の起動で依存が入ります（数十秒）。入れる先はコンテナの中なので、セッションのたびに入れ直します。入れられなかったときは、その旨が Claude と画面に出ます。
 4. 「この文書を校正して」と頼むか、`/ja-proofread-proofread` を呼びます。
 
-Projects のクラウドで動くスレッドで使うときは、同梱したリポジトリをプロジェクトのリポジトリ（Project settings > Environment の Project repositories）に入れて、新しいスレッドを始めます。プロジェクトのリポジトリにするには、つないだ GitHub のアカウントにそのリポジトリへの push の権限があり、そのリポジトリに Claude GitHub App が入っている必要があります。`/web-setup` でつないだトークンは、ほかのクラウドセッションでは使えても、Projects のクラウドのスレッドには足りません（[Check the prerequisites](https://code.claude.com/docs/en/claude-projects#check-the-prerequisites)、[Set up GitHub access](https://code.claude.com/docs/en/claude-projects#set-up-github-access)）。フックは動かないので、書いた直後の校正と、起動のときの依存の準備はありません。「この文書を校正して」と頼むか `/ja-proofread-proofread` を呼ぶと、スキルの準備で依存を入れてから校正します（未確認）。依存は、プロジェクトのクラウドの環境のセットアップスクリプトで入れる手もあります（[Limitations in cloud sessions](https://code.claude.com/docs/en/cloud-environments#limitations-in-cloud-sessions)。このプラグインでは試していません）。
+Projects のクラウドで動くスレッドで使うときは、同梱したリポジトリをプロジェクトのリポジトリ（Project settings > Environment の Project repositories）に入れて、新しいスレッドを始めます。プロジェクトのリポジトリにするには、つないだ GitHub のアカウントにそのリポジトリへの push の権限があり、そのリポジトリに Claude GitHub App が入っている必要があります。`/web-setup` でつないだトークンは、ほかのクラウドセッションでは使えても、Projects のクラウドのスレッドには足りません（[Check the prerequisites](https://code.claude.com/docs/en/claude-projects#check-the-prerequisites)、[Set up GitHub access](https://code.claude.com/docs/en/claude-projects#set-up-github-access)）。フックは動かないので、書いた直後の校正と、起動のときの依存の準備はありません。「この文書を校正して」と頼むか `/ja-proofread-proofread` を呼ぶと、スキルの準備で依存を入れてから校正します（未確認）。依存は、プロジェクトのクラウドの環境のセットアップスクリプトで入れる手もあります（[Limitations in cloud sessions](https://code.claude.com/docs/en/cloud-environments#limitations-in-cloud-sessions)。このプラグインでは試していません）。書いた直後の校正の代わりは、[install-projects.md](install-projects.md) の kit とプロジェクト指示です（同梱と一緒に使えます）。
 
 ### 新しい版にする
 
@@ -186,7 +188,7 @@ cd <対象のリポジトリ> && git add -A -- .claude/ja-proofread .claude/skil
 
 ### B2. Projects のスレッド
 
-Projects は Pro・Max・Ultra のプランで使えます（Team・Enterprise ではまだ使えません。[Claude Projects](https://code.claude.com/docs/en/claude-projects)）。Project settings に、プラグインの項目はありません（項目は General・Memory・Environment・Usage・Advanced。[Project settings reference](https://code.claude.com/docs/en/claude-projects#project-settings-reference)）。公式の説明では、クラウドで動くスレッドには、B1 のとおり claude.ai のアカウントで足したプラグインが読み込まれます（持ち主の環境では、B1 のマーケットプレイスの追加ができませんでした）。プロジェクトのリポジトリに方法Aで同梱したスキルとサブエージェントも読み込まれます（フックは動きません）。
+Projects は Pro・Max・Ultra のプランで使えます（Team・Enterprise ではまだ使えません。[Claude Projects](https://code.claude.com/docs/en/claude-projects)）。Project settings に、プラグインの項目はありません（項目は General・Memory・Environment・Usage・Advanced。[Project settings reference](https://code.claude.com/docs/en/claude-projects#project-settings-reference)）。公式の説明では、クラウドで動くスレッドには、B1 のとおり claude.ai のアカウントで足したプラグインが読み込まれます（持ち主の環境では、B1 のマーケットプレイスの追加ができませんでした）。プロジェクトのリポジトリに方法Aで同梱したスキルとサブエージェントも読み込まれます（フックは動きません）。主な手順は [install-projects.md](install-projects.md) です。
 
 ### B3. claude.ai のアカウントのスキル
 

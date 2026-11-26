@@ -80,10 +80,14 @@ const SETUP_TEMPLATE = String.raw`#!/usr/bin/env node
 // ja-proofread v@@VERSION@@ の同梱の一式。このファイル1つで、校正したいリポジトリの .claude/ に ja-proofread を同梱する。
 // plugins/ja-proofread/scripts/build-setup.mjs が作ったファイルです。手で直さないでください。
 // 手元にプラグインを入れていなくても動きます（claude.ai/code のクラウドセッションの中でも）。依存はなく、Node だけで動きます。
-// 中のファイルの sha256 をすべて確かめてから一時ディレクトリに書き出し、その中の install-into-project.mjs を動かして、一時ディレクトリを消します。
+// 中のファイルの sha256 をすべて確かめてから一時ディレクトリに書き出し、その中の install-into-project.mjs（--project-kit のときは install-project-kit.mjs）を動かして、一時ディレクトリを消します。
 //
 //   node ja-proofread-setup.mjs [リポジトリ]            同梱する（省略時はカレントディレクトリ。git の作業コピーの根であること）
 //   node ja-proofread-setup.mjs [リポジトリ] --remove   同梱をやめる
+//   node ja-proofread-setup.mjs --project-kit <ディレクトリ> [--remove]
+//                                                     claude.ai/code の Projects で、リポジトリなしに使う kit を書く（消す）。
+//                                                     git の作業コピーでなくてよい（docs/install-projects.md）。
+//                                                     --as <使う場所> は、手元で作ってアップロードするときに、中のパスを使う場所で書く
 //   node ja-proofread-setup.mjs --list                  中のファイルと sha256 を表示する
 //   node ja-proofread-setup.mjs --version               版を表示する
 import { existsSync, statSync, realpathSync, mkdtempSync, mkdirSync, writeFileSync, rmSync, readFileSync } from "node:fs";
@@ -98,27 +102,37 @@ const FILES = [
 @@FILES@@
 ];
 
-const USAGE = "使い方: node ja-proofread-setup.mjs [リポジトリ] [--remove] | --list | --version";
+const USAGE = "使い方: node ja-proofread-setup.mjs [リポジトリ] [--remove] | --project-kit <ディレクトリ> [--as <使う場所>] [--remove] | --list | --version";
 const fail = (msg, code = 1) => { console.error(msg); process.exit(code); };
 const args = process.argv.slice(2);
 if (args.includes("--help") || args.includes("-h")) { console.log(USAGE); process.exit(0); }
 if (args.includes("--version")) { console.log(VERSION); process.exit(0); }
 if (args.includes("--list")) { for (const [p, sha] of FILES) console.log(sha + "  " + p); process.exit(0); }
+// --project-kit <ディレクトリ>：Projects 向けの kit を書く（git の作業コピーでなくてよい。docs/install-projects.md）
+let kitDir = null;
+const ki = args.indexOf("--project-kit");
+if (ki >= 0) {
+  kitDir = args[ki + 1];
+  if (!kitDir || kitDir.startsWith("-")) fail("--project-kit のあとに kit を書くディレクトリを指定します（例：--project-kit /mnt/project-files/ja-proofread-kit）\n" + USAGE, 2);
+  args.splice(ki, 2);
+}
+// --as <使う場所>：手元で kit を作ってプロジェクトの Context にアップロードするとき、手順と指示の中のパスを使う場所で書く
+let asPath = null;
+const ai = args.indexOf("--as");
+if (ai >= 0) {
+  asPath = args[ai + 1];
+  if (!kitDir) fail("--as は --project-kit と一緒に使います\n" + USAGE, 2);
+  if (!asPath || !asPath.startsWith("/")) fail("--as のあとに、kit を使う場所を / で始まるパスで指定します（例：--as /mnt/project-files/ja-proofread-kit）\n" + USAGE, 2);
+  args.splice(ai, 2);
+}
 const unknown = args.filter((a) => a.startsWith("-") && a !== "--remove");
 if (unknown.length) fail("知らないオプションです: " + unknown.join(" ") + "\n" + USAGE, 2);
 const pos = args.filter((a) => !a.startsWith("-"));
+if (kitDir && pos.length) fail("--project-kit のときは、リポジトリは指定しません\n" + USAGE, 2);
 if (pos.length > 1) fail("リポジトリは1つだけ指定します\n" + USAGE, 2);
 const remove = args.includes("--remove");
-const target = resolve(pos[0] ?? process.cwd());
-if (!existsSync(target) || !statSync(target).isDirectory()) fail(target + " はディレクトリではありません\n" + USAGE, 2);
-
-// git の作業コピーの根でなければ止める（.claude/ はリポジトリの根に置かないと読まれないため）
-const git = (a, opts = {}) => spawnSync("git", a, { cwd: target, encoding: "utf8", ...opts });
-const top = git(["rev-parse", "--show-toplevel"]);
-if (top.error) fail("git が見つかりません。git の作業コピーの根で動かしてください（" + top.error.message + "）");
-if (top.status !== 0) fail(target + " は git の作業コピーではありません。校正したいリポジトリの根を指定してください\n" + (top.stderr || "").trim());
-const root = top.stdout.trim();
-if (realpathSync(root) !== realpathSync(target)) fail(target + " は git の作業コピーの根ではありません。根（" + root + "）を指定してください");
+const target = resolve(kitDir ?? pos[0] ?? process.cwd());
+if (!kitDir && (!existsSync(target) || !statSync(target).isDirectory())) fail(target + " はディレクトリではありません\n" + USAGE, 2);
 
 // 書く前に、すべてのファイルの sha256 を確かめる（壊れていれば何も書かない）
 const bufs = [];
@@ -129,6 +143,35 @@ for (const [p, sha, b64] of FILES) {
   if (got !== sha) fail(p + " の sha256 が合わないので、何も書かずに止めました（期待 " + sha + "、実際 " + got + "）。このファイルが壊れているので、取り直してください");
   bufs.push([p, buf]);
 }
+// 中のファイルを一時ディレクトリに書き出し、その中のスクリプトを動かす
+const runInside = (script, scriptArgs, stdio) => {
+  const work = mkdtempSync(join(tmpdir(), "ja-proofread-setup-"));
+  try {
+    for (const [p, buf] of bufs) {
+      const dest = join(work, p);
+      mkdirSync(dirname(dest), { recursive: true });
+      writeFileSync(dest, buf);
+    }
+    const r = spawnSync(process.execPath, [join(work, "scripts", script), ...scriptArgs], { stdio, encoding: "utf8" });
+    if (r.error) console.error(r.error.message);
+    return r;
+  } finally {
+    rmSync(work, { recursive: true, force: true });
+  }
+};
+
+if (kitDir) {
+  const r = runInside("install-project-kit.mjs", [target, ...(asPath ? ["--as", asPath] : []), ...(remove ? ["--remove"] : [])], "inherit");
+  process.exit(r.status ?? 1);
+}
+
+// git の作業コピーの根でなければ止める（.claude/ はリポジトリの根に置かないと読まれないため）
+const git = (a, opts = {}) => spawnSync("git", a, { cwd: target, encoding: "utf8", ...opts });
+const top = git(["rev-parse", "--show-toplevel"]);
+if (top.error) fail("git が見つかりません。git の作業コピーの根で動かしてください（" + top.error.message + "）");
+if (top.status !== 0) fail(target + " は git の作業コピーではありません。校正したいリポジトリの根を指定してください（リポジトリなしで Projects に入れるときは --project-kit を使います）\n" + (top.stderr || "").trim());
+const root = top.stdout.trim();
+if (realpathSync(root) !== realpathSync(target)) fail(target + " は git の作業コピーの根ではありません。根（" + root + "）を指定してください");
 
 // やめるときにステージするパスは、やめる前の一覧（vendored.json）から作る
 const readManifest = () => { try { return JSON.parse(readFileSync(join(target, ".claude", "ja-proofread", "vendored.json"), "utf8")); } catch { return null; } };
@@ -144,22 +187,10 @@ const hasOurHooks = () => {
 };
 const vendoredBefore = before !== null || existsSync(join(target, ".claude", "ja-proofread")) || hasOurHooks();
 
-const work = mkdtempSync(join(tmpdir(), "ja-proofread-setup-"));
-let status = 1;
-try {
-  for (const [p, buf] of bufs) {
-    const dest = join(work, p);
-    mkdirSync(dirname(dest), { recursive: true });
-    writeFileSync(dest, buf);
-  }
-  // install-into-project.mjs の「コミットするパス」の行（ja-proofread-* の書き方）は、下で同梱したものの名前だけの行に置き換える
-  const r = spawnSync(process.execPath, [join(work, "scripts", "install-into-project.mjs"), target, ...(remove ? ["--remove"] : [])], { stdio: ["inherit", "pipe", "inherit"], encoding: "utf8" });
-  process.stdout.write((r.stdout || "").split("\n").filter((l) => !l.startsWith("コミットするパス：")).join("\n"));
-  status = r.status ?? 1;
-  if (r.error) console.error(r.error.message);
-} finally {
-  rmSync(work, { recursive: true, force: true });
-}
+// install-into-project.mjs の「コミットするパス」の行（ja-proofread-* の書き方）は、下で同梱したものの名前だけの行に置き換える
+const ir = runInside("install-into-project.mjs", [target, ...(remove ? ["--remove"] : [])], ["inherit", "pipe", "inherit"]);
+process.stdout.write((ir.stdout || "").split("\n").filter((l) => !l.startsWith("コミットするパス：")).join("\n"));
+const status = ir.status ?? 1;
 if (status !== 0) process.exit(status);
 if (remove && !vendoredBefore) process.exit(0);
 
