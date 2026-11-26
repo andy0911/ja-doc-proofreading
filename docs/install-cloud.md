@@ -5,13 +5,16 @@
 | 使う場所 | このプラグインの使い方 | 確かめた程度 |
 |---|---|---|
 | claude.ai/code で、リポジトリを1つだけ選んだセッション | 方法A（リポジトリに同梱） | コンテナの中の CLI で確認。実際のセッションでは未確認 |
-| claude.ai/code で、リポジトリを複数選んだセッション | 方法A。ただしフックは動かない | 未確認 |
-| claude.ai の Projects のスレッドで、クラウドで動くもの | 方法Aは使えない。方法Bの2か3 | 未確認 |
+| claude.ai/code で、リポジトリを複数選んだセッション | 方法A。ただしフックは動かない（※） | 未確認 |
+| claude.ai の Projects のスレッドで、クラウドで動くもの | 方法Aで同梱すれば、スキルとサブエージェントは使える見込み。フックは動かないので書いた直後の自動校正はなく、依存は proofread スキルの準備（`ensure-deps.mjs`）で入る（※） | 未確認 |
+| claude.ai のアカウントにプラグインを足したとき（claude.ai/customize/plugins） | クラウドセッションと、Projects のクラウドで動くスレッドに読み込まれる（下の B1）。このプラグインのフック・依存・データ置き場が動くかは未確認 | 未確認 |
 | claude.ai の Projects のスレッドで、自分のコンピューターで動かすもの（Remote Control） | そのコンピューターの Claude Code が動くので、手元に入れたプラグインか、方法Aで同梱したリポジトリが使える見込み（下の B4） | 未確認 |
 
-クラウドセッションは、毎回まっさらなコンテナでリポジトリを開きます。手元で入れたプラグインは持ち込まれません。公式の説明では、リポジトリの設定やユーザー設定で有効にしたプラグインも読み込まれません。読まれるのは、リポジトリの `.claude/skills/`、`.claude/agents/`、`.claude/commands/`、`CLAUDE.md` です。`.claude/settings.json` の `hooks` は、リポジトリを1つだけ選んだセッションでだけ読まれます（[What carries over from your setup](https://code.claude.com/docs/en/cloud-environments#what-carries-over-from-your-setup)）。
+※ 公式の説明では、リポジトリを複数選んだセッションは、クローンの上の階層で始まります（[Settings in cloud sessions](https://code.claude.com/docs/en/settings#settings-in-cloud-sessions)）。そのため、リポジトリの直下に置いた `.ja-proofread.json` が見つからず、既定の設定（`include`・`exclude`・`prh` などを書いていない状態）で校正される可能性があります（未確認）。Projects のスレッドでリポジトリが複数あるときも同じことが起きるかもしれません。
 
-Projects のスレッドのうちクラウドで動くものはさらに狭く、リポジトリから読むのは `CLAUDE.md`、`.claude/CLAUDE.md`、`.claude/rules/` だけです。`.claude/skills/`、`.claude/agents/`、`.claude/settings.json` のフックは読まれません（[Claude Projects](https://code.claude.com/docs/en/claude-projects)）。そのため、方法Aで同梱しても、クラウドで動く Projects のスレッドでは動きません。自分のコンピューターで動かすスレッドは別で、下の B4 を見てください。
+クラウドセッションは、毎回まっさらなコンテナでリポジトリを開きます。手元で入れたプラグインは持ち込まれません。公式の説明では、ユーザー設定で有効にしたプラグインは読み込まれず、リポジトリの `.claude/settings.json` の `extraKnownMarketplaces` に書いたマーケットプレイスも足されません。読み込まれるのは、claude.ai のアカウントで足したプラグイン（下の B1）と、リポジトリの `.claude/skills/`、`.claude/agents/`、`.claude/commands/`、`CLAUDE.md` です。`.claude/settings.json` の `hooks` は、リポジトリを1つだけ選んだセッションでだけ読まれます（[What carries over from your setup](https://code.claude.com/docs/en/cloud-environments#what-carries-over-from-your-setup)）。
+
+Projects のスレッドのうちクラウドで動くものも、リポジトリの `CLAUDE.md`、`.claude/CLAUDE.md`、`.claude/rules/` に加えて、`.claude/` の下のスキル・サブエージェント・コマンドを読みます。読まないのは、`.mcp.json` と、`.claude/settings.json` のフック・権限の規則・`env` です（[What threads pick up from your repositories](https://code.claude.com/docs/en/claude-projects#what-threads-pick-up-from-your-repositories)）。ただし、2026年10月1日より前に始めたスレッド、名前がドットで始まるリポジトリ（`.github` など）を含むスレッド、セルフホストの環境のスレッドは、スキル・サブエージェント・コマンドも読みません。そのため、方法Aで同梱すれば、スキルとサブエージェントは使える見込みです。フックは動かないので、書いた直後の自動校正はありません。依存は、proofread スキルの準備（`ensure-deps.mjs`）で入ります（未確認）。自分のコンピューターで動かすスレッドは別で、下の B4 を見てください。
 
 ## 方法A：リポジトリに同梱する（コンテナの中の CLI で確認。実際のセッションでは未確認）
 
@@ -63,10 +66,12 @@ git push
 
 ### 3. クラウドセッションを開く
 
-1. そのリポジトリだけを選んでセッションを始めます。複数のリポジトリを選ぶと、`.claude/settings.json` のフックは読まれません。SessionStart のフックも動かないので、依存は proofread スキルの準備（`ensure-deps.mjs`）で入れることになります（未確認）。そのときスキルとサブエージェントが使えるかは、公式の説明では確かめられていません。
+1. そのリポジトリだけを選んでセッションを始めます。複数のリポジトリを選ぶと、`.claude/settings.json` のフックは読まれません。SessionStart のフックも動かないので、依存は proofread スキルの準備（`ensure-deps.mjs`）で入れることになります（未確認）。スキルとサブエージェントは、公式の説明ではリポジトリの数によらず読み込まれますが、確かめていません。`.ja-proofread.json` が見つからない可能性もあります（上の表の※）。
 2. 環境のネットワーク設定は「Trusted」（既定）のままにします。Trusted には registry.npmjs.org が入っていて、最初に textlint を入れるのに使います。「None」にすると textlint は動きませんが、構成の型のチェックと台帳の語句チェックの一部は動きます。
 3. 最初の起動で依存が入ります（数十秒）。入れる先はコンテナの中なので、セッションのたびに入れ直します。入れられなかったときは、その旨が Claude と画面に出ます。
 4. 「この文書を校正して」と頼むか、`/ja-proofread-proofread` を呼びます。
+
+Projects のクラウドで動くスレッドで使うときは、同梱したリポジトリをプロジェクトのリポジトリ（Project settings > Environment の Project repositories）に入れて、新しいスレッドを始めます。フックは動かないので、書いた直後の校正と、起動のときの依存の準備はありません。「この文書を校正して」と頼むか `/ja-proofread-proofread` を呼ぶと、スキルの準備で依存を入れてから校正します（未確認）。
 
 ### 新しい版にする
 
@@ -107,13 +112,24 @@ git push
 
 ## 方法B：リポジトリに同梱しない（どれも確かめていない）
 
-### B1. リポジトリを1つ選んだクラウドセッション
+### B1. claude.ai のアカウントにプラグインを足す（クラウドセッション、Projects のクラウドのスレッド）
 
-リポジトリの設定（`enabledPlugins`、`extraKnownMarketplaces`）でプラグインを有効にしても、クラウドセッションでは読み込まれません（[What carries over from your setup](https://code.claude.com/docs/en/cloud-environments#what-carries-over-from-your-setup)）。claude.ai のアカウントで入れたプラグインがクラウドセッションに読み込まれるかは、公式の説明で確かめられませんでした。このため、今は方法Aを使ってください。
+公式の説明では、claude.ai のアカウントで足したプラグインは、claude.ai/code のクラウドセッションと、Projects で Claude が始めるクラウドのスレッドに読み込まれます（[Install plugins の Cloud session](https://code.claude.com/docs/en/plugins/install#install-a-plugin)、[Plugins synced from claude.ai](https://code.claude.com/docs/en/plugins/loading#plugins-synced-from-claudeai)、[Get skills, plugins, connectors, and tools into threads](https://code.claude.com/docs/en/claude-projects#get-skills-plugins-connectors-and-tools-into-threads)）。リポジトリに同梱しなくてよい方法です。
+
+1. [claude.ai/customize/plugins](https://claude.ai/customize/plugins) を開き、Add > Add marketplace を選びます。
+2. `andy0911/ja-doc-proofreading` を入れます。このリポジトリは非公開なので、ダイアログに従って GitHub のアカウントをつなぎ、Claude GitHub App にこのリポジトリへのアクセスを与えます。アクセスが足りないときは、ダイアログに Connect GitHub か Install the Claude GitHub App が出ます（[Find and add a plugin](https://claude.com/docs/plugins/overview#find-and-add-a-plugin)）。
+3. 一覧に出た ja-proofread を足し、新しいセッション（Projects なら新しいスレッド）を始めます。
+4. Team・Enterprise のプランでは、どの足し方を使えるかを Owner が決めます。
+
+新しい版が出たら、Check for updates を選びます。github.com から足したマーケットプレイスは、Sync automatically をオンにすると自動で取り込まれます（[Manage installed plugins](https://claude.com/docs/plugins/overview#manage-installed-plugins)）。
+
+ただし、この経路で読み込んだときに、このプラグインのフック（起動のときの依存の準備と、書いた直後の校正）、依存（textlint）を入れる場所、データ置き場（`${CLAUDE_PLUGIN_DATA}`）が動くかは確かめていません。動かないときは方法Aを使います。
+
+同じアカウントでログインした手元の Claude Code にも、`ja-proofread@synced` という名前で読み込まれます（端末では v2.1.273 以降）。手元で[マーケットプレイスから入れた](install-local.md)版もあると、2つ読み込まれ、指摘が二重に出るかもしれません（未確認）。そのときは、どちらか一方にします。
 
 ### B2. Projects のスレッド
 
-Projects では、プラグインをプロジェクトの設定（Project settings の Plugins）から足します（[Claude Projects](https://code.claude.com/docs/en/claude-projects)）。このマーケットプレイスは非公開の GitHub リポジトリなので、そこで追加できるかは確かめていません。
+Projects の Project settings に、プラグインの項目はありません（項目は General・Memory・Environment・Usage・Advanced。[Project settings reference](https://code.claude.com/docs/en/claude-projects#project-settings-reference)）。クラウドで動くスレッドには、B1 のとおり claude.ai のアカウントで足したプラグインが読み込まれます。プロジェクトのリポジトリに方法Aで同梱したスキルとサブエージェントも読み込まれます（フックは動きません）。
 
 ### B3. claude.ai のアカウントのスキル
 
@@ -123,15 +139,16 @@ claude.ai のアカウントで有効にしたスキルは、クラウドセッ�
 
 公式の説明では、Projects のスレッドは、Remote Control を通して自分のコンピューターのフォルダーで動く Claude Code のセッションにできます。そのときは、そのコンピューターのファイル・ツール・MCP サーバー・Claude Code の設定（フックや権限の規則を含む）で動きます（[Run a thread on your own computer](https://code.claude.com/docs/en/claude-projects)）。このため、そのコンピューターに入れたプラグイン（[install-local.md](install-local.md) の手順）か、方法Aで同梱したリポジトリのスキル・フックが使える見込みです。ただし、このプラグインで実際に試してはいません。
 
-公式の説明にある条件と手順は次のとおりです。
+公式の説明にある条件と手順は次のとおりです（[Run a thread on your own computer](https://code.claude.com/docs/en/claude-projects#run-a-thread-on-your-own-computer)、[Remote Control の Requirements](https://code.claude.com/docs/en/remote-control#requirements)）。
 
-- Claude Code v2.1.280 以降が要ります
-- Remote Control は Pro・Max・Team・Enterprise のプランで、claude.ai のアカウントでログインしているときに使えます。API キーや Bedrock・Vertex・Foundry では使えません（[Remote Control](https://code.claude.com/docs/en/remote-control)）
+- そのコンピューターに Claude Code v2.1.280 以降が要ります
+- Remote Control は Pro・Max・Ultra・Team・Enterprise のプランで使えます。Team と Enterprise では、先に Owner が [Claude Code の管理設定](https://claude.ai/admin-settings/claude-code)で Remote Control のスイッチをオンにします
+- claude.ai のアカウントでログインしているときだけ使えます（`/login`）。API キー、Amazon Bedrock・Google Cloud の Agent Platform・Microsoft Foundry、`ANTHROPIC_BASE_URL` をほかのホストに向けているとき、Claude apps gateway からのログインでは使えません
 - スレッドが動くのは、そのコンピューターが起きていて Remote Control がつながっている間だけです
-- 組織で「Require trusted devices」が有効なときは使えません
-- 準備：デスクトップアプリの Settings > Claude Code で「Use this computer from your phone and claude.ai」を有効にしてフォルダーを足すか、そのフォルダーで `claude remote-control` を実行します
-- スレッドでは、+ のメニューから「Work locally」を選びます。「Allow Claude to work in a folder on your device」のカードが出たら許可します
-- スレッドは、プロジェクトの指示を持って始まりますが、プロジェクトのメモリーは持ち込みません
+- アカウントで「Require trusted devices」が有効なときは、「Work locally」が灰色になり、そのプロジェクトのスレッドを自分のコンピューターで動かせません。そのフォルダーで作業するときは、そのコンピューターで Claude Code を直接動かします（[Trusted Devices](https://code.claude.com/docs/en/remote-control#trusted-devices)。Pro・Max・Ultra では本人が、Team・Enterprise では Owner がオンにする設定です）
+- 準備：デスクトップアプリの Settings > Code（または Settings > Claude Code）で「Use this computer from your phone and claude.ai」をオンにし、そのスイッチの下の一覧にフォルダーを足します（アプリを開いている間だけ動きます）。または、そのフォルダーで `claude remote-control` を実行したままにします
+- スレッドを始めるには、プロジェクトの会話で + のメニューから「Work locally」（デスクトップアプリでは「Work in a local folder」）を選び、やってほしいことを書きます。「Allow Claude to work in a folder on your computer」のカードが出たら、フォルダーを選んで「Allow once」を押します
+- スレッドは、プロジェクトの指示を持って始まりますが、プロジェクトのメモリーのファイルは読み込みません
 
 プラグインを更新したあと、すでに動いているセッションに反映するには `/reload-plugins` が要ります。公式の説明では、`/plugin` は手元の端末でしか使えず、`/reload-plugins` はスマートフォンや Web から送れるものの、そのセッションが対話できる端末で動いているときだけ受け付けます（[Remote Control の Limitations](https://code.claude.com/docs/en/remote-control)）。デスクトップアプリから動かしているときなど、受け付けられないときは、そのコンピューターでセッションを始め直します。
 
@@ -139,8 +156,8 @@ claude.ai のアカウントで有効にしたスキルは、クラウドセッ�
 
 | 起きたこと | 確かめること |
 |---|---|
-| スキルが一覧に出ない | `.claude/skills/ja-proofread-*` をコミットしたか。プッシュ前のブランチでセッションを始めていないか。クラウドで動く Projects のスレッドでは出ません |
-| 書いた直後の校正が動かない | リポジトリを1つだけ選んで始めたか。`.ja-proofread.json` がリポジトリの直下にあるか |
+| スキルが一覧に出ない | `.claude/skills/ja-proofread-*` をコミットしたか。プッシュ前のブランチでセッションを始めていないか。Projects のクラウドのスレッドでは、2026年10月1日より前に始めたスレッドと、名前がドットで始まるリポジトリを含むスレッドでは出ないので、新しいスレッドを始めるか、B4 のように自分のコンピューターで動かします |
+| 書いた直後の校正が動かない | リポジトリを1つだけ選んで始めたか。`.ja-proofread.json` がリポジトリの直下にあるか。Projects のクラウドのスレッドではフックが動かないので、スキルで校正します |
 | 「textlint の依存がまだ入っていません」と出る | 環境のネットワークが Trusted か。`node .claude/ja-proofread/scripts/ensure-deps.mjs` を実行して npm のエラーを見る |
 | 「textlint が動かなかった」と出る | textlint の指摘は確かめられていません。表示されたエラーを見て、`ensure-deps.mjs` で入れ直す |
 | 指摘が二重に出る | 手元で同じリポジトリを開いたときは、同梱した版が優先され、プラグイン側のフックは黙ります。それでも二重なら `.claude/settings.json` のフックが重複していないか見る |

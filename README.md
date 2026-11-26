@@ -49,6 +49,7 @@ plugins/ja-proofread/
   rules/ledger-patterns.js        台帳の正規表現を textlint のルールにしたもの
   scripts/                        校正、構成チェック、頻度比較、台帳の反映、同梱
   scripts/regex-safety.mjs        台帳と辞書の正規表現が遅くならないかの検査
+  scripts/prh-load.mjs            プロジェクトの prh 辞書を別のプロセスで読む（時間で打ち切るため）
   package.json、package-lock.json textlint とルールの版の固定
   templates/                      読者役テスト、人の確認項目、プロジェクト設定の例
   tests/                          動作確認（npm test）
@@ -60,7 +61,7 @@ plugins/ja-proofread/
 2. 候補を Notion の「文章校正 台帳候補」に1件1ページで登録するのは、本人が頼んだときか、プロジェクトの設定で `notion.autoRegisterCandidates` が `true` のときだけです。それ以外は候補を一覧にして本人に聞きます。
 3. 「承認」にするのは本人だけ、という約束です。Claude への指示で決めているだけで、Notion の権限で止めているわけではありません。
 4. 承認された候補を、このリポジトリの作業コピーの根で `node plugins/ja-proofread/scripts/ledger.mjs apply approved.json` にかけると、台帳と版が上がり、`CHANGELOG.md` に記録されます。全件を確かめてから書くので、1件でも問題があればどのファイルも変わりません。
-5. プルリクエストを出したら Notion の行を「PR中」に、マージしたら「反映済み」にします。
+5. プルリクエストを出したら、Notion の行の「状態」を「PR中」にし、「台帳ID」「反映版」「PR」の列を埋めます。マージしたら「反映済み」にします。
 6. 利用者は、上の「入れ方」の update の2つのコマンドを実行し、起動し直すと新しい版を使えます。
 
 ## テスト

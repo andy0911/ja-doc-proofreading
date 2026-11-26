@@ -1,8 +1,10 @@
 #!/usr/bin/env node
 // プラグインの部品を、プロジェクトの .claude/ に同梱する。
-// claude.ai/code で1つのリポジトリを選んで始めるクラウドセッションは、リポジトリの enabledPlugins や extraKnownMarketplaces を読まない。
-// 一方、そのリポジトリの .claude/skills・.claude/agents・.claude/settings.json のフックは読む。そのための同梱方式。
-// （claude.ai の Projects のスレッドは、どれも読まない。docs/install-cloud.md を参照）
+// claude.ai/code で1つのリポジトリを選んで始めるクラウドセッションは、リポジトリの extraKnownMarketplaces のマーケットプレイスを足さないので、
+// enabledPlugins に書いてもプラグインは入らない。一方、そのリポジトリの .claude/skills・.claude/agents・.claude/settings.json のフックは読む。そのための同梱方式。
+// claude.ai の Projects のクラウドのスレッドは、スキルとサブエージェントは読むが（2026-10-01 より前に始めたスレッド、名前がドットで始まるリポジトリ、
+// セルフホストの環境を除く）、.claude/settings.json のフックは読まない。そこでは書いた直後の校正は動かず、依存は proofread スキルの準備（ensure-deps）で入る（未確認）。
+// 詳しくは docs/install-cloud.md を参照
 //
 //   node install-into-project.mjs <プロジェクトのディレクトリ>            同梱する（やり直すと最新版で入れ替える）
 //   node install-into-project.mjs <プロジェクトのディレクトリ> --remove   同梱をやめる

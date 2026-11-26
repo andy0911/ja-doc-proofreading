@@ -1,10 +1,10 @@
 // 動作確認。node tests/run.mjs （依存は先に scripts/ensure-deps.mjs で入れる）
 // 利用者の記録を汚さないよう、データ置き場は一時ディレクトリにする（依存だけは入れたものをリンクして使う）
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync, readFileSync, existsSync, cpSync, mkdirSync, symlinkSync, statSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, existsSync, cpSync, mkdirSync, symlinkSync, statSync, rmSync, readdirSync, lstatSync } from "node:fs";
 import { join, resolve, dirname } from "node:path";
 import { tmpdir, homedir } from "node:os";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { createHash } from "node:crypto";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -14,7 +14,12 @@ const ok = (name, cond, detail = "") => {
   console.log(`${cond ? "✓" : "✗"} ${name}${cond ? "" : "  " + String(detail).slice(0, 400)}`);
   if (cond) passed++; else failed++;
 };
-const tmp = (p) => mkdtempSync(join(tmpdir(), p));
+// 作った一時ディレクトリは覚えておき、終わりに消す（中の deps はリンクなので、リンクだけが消える）
+const made = [];
+const tmp = (p) => { const d = mkdtempSync(join(tmpdir(), p)); made.push(d); return d; };
+const cleanup = () => { for (const d of made.splice(0)) { try { rmSync(d, { recursive: true, force: true }); } catch { /* 消せなくても続ける */ } } };
+process.on("exit", cleanup);
+const tmpBefore = new Set(readdirSync(tmpdir()));
 // 条件を調べる途中で例外が出ても、テスト全体を止めずに ✗ として数える
 const safe = (f) => { try { return f(); } catch (e) { return false; } };
 
@@ -546,6 +551,132 @@ r = run([mLedgerJs, "validate"]);
 ok("validate は marketplace.json の version を、plugin.json と同じ版でも拒否する（版は plugin.json だけに書く）", r.status === 1 && /marketplace\.json/.test(r.stderr), r.stderr);
 const realMarket = json(readFileSync(resolve(ROOT, "..", "..", ".claude-plugin/marketplace.json"), "utf8"));
 ok("このリポジトリの marketplace.json に version がない", !realMarket.plugins?.some((p) => p.version !== undefined));
+
+// 19. 0.1.4 で直した不具合の再現
+const SLOW_SPEC = `  - expected: b\n    pattern: /(a+)+b/\n    specs:\n      - from: ${"a".repeat(40)}!\n        to: ${"a".repeat(40)}!\n`;
+if (!hasDeps) console.log("- （依存がないため、prh の specs と時間の上限の確認は飛ばしました）");
+else {
+  // 7・9. specs で止まる辞書は、子プロセスで読んで時間で打ち切り、辞書ごと外す。上限は2つの辞書で1つを分け合う
+  const specDir = tmp("jp-spec-");
+  write(specDir, "team.yml", "version: 1\nrules:\n" + SLOW_SPEC);
+  write(specDir, "team2.yml", "version: 1\nrules:\n" + SLOW_SPEC.replace("expected: b", "expected: c"));
+  write(specDir, "good.yml", "version: 1\nrules:\n  - expected: 問い合わせ\n    pattern: 問合せ\n");
+  writeFileSync(join(specDir, ".ja-proofread.json"), JSON.stringify({ prh: ["good.yml", "team.yml", "team2.yml"] }));
+  write(specDir, "d.md", "# 窓口\n\n問合せは窓口で受けます。\n");
+  t0 = Date.now();
+  r = run([S("hook-post-edit.mjs")], { input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: join(specDir, "d.md") }, cwd: specDir }), env: { CLAUDE_PROJECT_DIR: specDir, JA_PROOFREAD_PRH_BUDGET_MS: "3000" }, timeout: 30000 });
+  const specMs = Date.now() - t0;
+  const specOut = json(r.stdout).hookSpecificOutput?.additionalContext || json(r.stdout).reason || "";
+  ok(`specs で止まる prh 辞書があってもフックが戻り、その辞書だけを外す（${specMs}ms）`, !r.error && /team\.yml を時間内に読み終えなかった/.test(specOut) && /team2\.yml を時間内に読み終えなかった/.test(specOut), (r.error?.message || "") + specOut.slice(0, 400));
+  ok("2つの辞書が止まっても、上限（3秒）は辞書ごとではなく1つを分け合う（12秒以内に戻る）", !r.error && specMs < 12000, specMs);
+  ok("止まる辞書を外しても、ほかの辞書の規則は使う", /問い合わせ/.test(specOut), specOut.slice(0, 300));
+
+  // 10. フックから呼ぶ textlint は締め切りまでに打ち切る
+  const hangData = tmp("jp-hang-");
+  write(hangData, "deps/.stamp", readFileSync(join(fake, "deps/.stamp"), "utf8"));
+  write(hangData, "deps/node_modules/textlint/bin/textlint.js", "setInterval(() => {}, 1000);\n");
+  const hangScript = write(tmp("jp-hangjs-"), "t.mjs", `import { runTextlint, loadProjectConfig } from ${JSON.stringify(S("lib.mjs"))};\nconst t = Date.now();\nconst r = runTextlint([${JSON.stringify(join(ROOT, "tests/fixtures/plain.md"))}], "doc", loadProjectConfig(), { deadline: Date.now() + 2000 });\nconsole.log(JSON.stringify({ ms: Date.now() - t, ok: r.ok, e: r.lintError }));\n`);
+  r = run([hangScript], { env: { JA_PROOFREAD_DATA: hangData }, timeout: 30000 });
+  const hang = json(r.stdout);
+  ok(`締め切りを渡すと、止まった textlint を打ち切って lintError を返す（${hang.ms}ms）`, !r.error && hang.ok === false && /時間内/.test(hang.e || "") && hang.ms < 8000, (r.error?.message || "") + r.stdout + r.stderr.slice(0, 200));
+  const hookSrc = readFileSync(S("hook-post-edit.mjs"), "utf8");
+  const hooksJson = json(readFileSync(join(ROOT, "hooks/hooks.json"), "utf8"));
+  const hookTimeout = hooksJson.hooks.PostToolUse[0].hooks[0].timeout;
+  ok("フックは締め切りを proofreadFiles に渡し、HOOK_TIMEOUT_MS は hooks.json と同梱の timeout と同じ", /proofreadFiles\(\[abs\], \{ cfg, deadline \}\)/.test(hookSrc) && new RegExp(`HOOK_TIMEOUT_MS = ${hookTimeout * 1000};`).test(hookSrc) && readFileSync(S("install-into-project.mjs"), "utf8").includes(`cmd("hook-post-edit.mjs"), timeout: ${hookTimeout} }`), hookTimeout);
+}
+
+// 8. 繰り返さないグループの選択は、重ならないかを当てて確かめない。u でも BMP の外に当たらない選択肢なら BMP だけを当てる
+const rs8 = await import(join(ROOT, "scripts/regex-safety.mjs"));
+t0 = Date.now();
+for (let i = 0; i < 60; i++) rs8.shapeProblem(`(?:${String.fromCharCode(0x7000 + i * 2)}|${String.fromCharCode(0x7001 + i * 2)})x`, "mu");
+const unrepMs = Date.now() - t0;
+t0 = Date.now();
+for (let i = 0; i < 20; i++) rs8.shapeProblem(`(?:${String.fromCharCode(0x7100 + i * 2)}|${String.fromCharCode(0x7101 + i * 2)})+x`, "mu");
+const bmpMs = Date.now() - t0;
+ok(`繰り返さないグループの選択60件の形の検査が200ms以内（${unrepMs}ms）、u つきで繰り返す選択20件が600ms以内（${bmpMs}ms）`, unrepMs < 200 && bmpMs < 600);
+const shapes8 = safe(() => [
+  ["(?:(?:、|,)x)+", ""], ["(?:(?:[一-龯]|[一-龯])x)+", ""], ["(?:\\u{1F600}|\\uD83D\\uDE00)+", "u"], ["(?:\\S|😀)+", "u"], ["(?:😀|😁)+", "u"], ["(?:[^a]|😀)+", "u"], ["(?:(?:a|aa))+", ""], ["(?:a|b)(?:c|cc)", ""],
+].map(([p, f]) => rs8.shapeProblem(p, f))) || [];
+ok("中の選択は、外のグループが繰り返すときに確かめる（重なるものは拒否、BMP の外の文字に当たり得るものは全体を当てる）", JSON.stringify(shapes8) === JSON.stringify([null, "alternation", "alternation", "alternation", null, "alternation", "alternation", null]), JSON.stringify(shapes8));
+// 形の検査の時間も締め切りに入れる
+const { checkRegexesCached } = await import(join(ROOT, "scripts/lib.mjs"));
+const slowShapes = Array.from({ length: 60 }, (_, i) => ({ source: `(?:\\p{Script=Han}|${String.fromCharCode(0x3041 + i)})+`, flags: "u" }));
+// この中で記録を書くので、データ置き場は一時ディレクトリにする（利用者の記録を汚さない）
+const outerEnvData = process.env.JA_PROOFREAD_DATA;
+process.env.JA_PROOFREAD_DATA = tmp("jp-budget-");
+t0 = Date.now();
+const budgetRes = safe(() => checkRegexesCached(slowShapes, { budgetMs: 300 })) || [];
+const budgetMs8 = Date.now() - t0;
+if (outerEnvData === undefined) delete process.env.JA_PROOFREAD_DATA; else process.env.JA_PROOFREAD_DATA = outerEnvData;
+ok(`形の検査も締め切りに入れ、300ms の上限なら2秒以内に戻り、残りは未確認（null）にする（${budgetMs8}ms）`, budgetMs8 < 2000 && budgetRes.length === 60 && budgetRes.some((x) => x === null), budgetMs8 + " " + JSON.stringify(budgetRes.slice(-2)));
+if (hasDeps) {
+  const altLines = ["version: 1", "rules:"];
+  for (let i = 0; i < 400; i++) altLines.push(`  - expected: 正${i}`, "    patterns:", `      - /(?:${String.fromCharCode(0x4e00 + i * 2)}|${String.fromCharCode(0x4e01 + i * 2)})ウエ${i}/`);
+  const altDir = prhProj(altLines.join("\n") + "\n");
+  const altData = tmp("jp-altdata-");
+  symlinkSync(join(OUTER_DATA, "deps"), join(altData, "deps"));
+  const altDoc = write(altDir, "d.md", "# 語\n\n丁ウエ0を書きます。\n");
+  t0 = Date.now();
+  const altRep = proofread(altDoc, [], { cwd: altDir, env: { JA_PROOFREAD_DATA: altData }, timeout: 120000 });
+  const altMs = Date.now() - t0;
+  ok(`選択肢つきの規則400件の辞書の初回が6秒以内で、規則が使われる（${altMs}ms）`, altMs < 6000 && !(altRep.warnings || []).length && prhMsgs(altRep).some((m) => /正0/.test(m)), altMs + JSON.stringify(altRep.warnings));
+}
+
+// 11. 子プロセスが一時的に失敗した「時間を測れませんでした」は記録に残さず、次に測り直す
+const crashMod = write(tmp("jp-crashmod-"), "crash.mjs", 'if (process.argv.includes("--probe-batch")) process.exit(3);\n');
+const tData = tmp("jp-transient-");
+const tScript = write(tmp("jp-transjs-"), "t.mjs", `import { checkRegexesCached } from ${JSON.stringify(S("lib.mjs"))};\nconsole.log(JSON.stringify(checkRegexesCached([{ source: "ただしいご(?:こう|おつ)ゑ", flags: "u" }])));\n`);
+const tRun = (env = {}) => json(run([tScript], { env: { JA_PROOFREAD_DATA: tData, ...env } }).stdout);
+const t1 = tRun({ NODE_OPTIONS: `--import=${pathToFileURL(crashMod).href}` });
+const tCache = safe(() => json(readFileSync(join(tData, "regex-checked.json"), "utf8"))) || {};
+const t2 = tRun();
+ok("測る子プロセスが止まったときは拒否するが、記録には残さない", Array.isArray(t1?.[0]) && /時間を測れませんでした/.test(t1[0][0] || "") && !Object.values(tCache).some((v) => Array.isArray(v) && v.some((e) => /時間を測れませんでした/.test(e))), JSON.stringify({ t1, tCache }));
+ok("次の校正では測り直して通す", Array.isArray(t2?.[0]) && t2[0].length === 0, JSON.stringify(t2));
+
+// 参考. 記録を使ったものは新しい扱いにし、古いものから捨てるときに残す
+const lruData = tmp("jp-lru-");
+const lruScript = write(tmp("jp-lrujs-"), "t.mjs", `import { checkRegexesCached } from ${JSON.stringify(S("lib.mjs"))};\nimport { regexKey } from ${JSON.stringify(S("regex-safety.mjs"))};\nimport { writeFileSync, readFileSync } from "node:fs";\nimport { join } from "node:path";\nconst p = join(process.env.JA_PROOFREAD_DATA, "regex-checked.json");\nconst keep = regexKey("よくつかうご", "u");\nconst data = { [keep]: [] };\nfor (let i = 1; i < 20000; i++) data["k" + i] = [];\nwriteFileSync(p, JSON.stringify(data));\ncheckRegexesCached([{ source: "よくつかうご", flags: "u" }, { source: "あたらしいご", flags: "u" }]);\nconst after = JSON.parse(readFileSync(p, "utf8"));\nconsole.log(JSON.stringify({ kept: keep in after, n: Object.keys(after).length }));\n`);
+const lru = json(run([lruScript], { env: { JA_PROOFREAD_DATA: lruData }, timeout: 60000 }).stdout);
+ok("記録が上限を超えて古いものを捨てるとき、今回使ったものは残す", lru.kept === true && lru.n === 20000, JSON.stringify(lru));
+
+// 13. hook-last.json は一時ファイルに書いてから置き換える（リンクの先を書き換えない、書きかけを残さない）
+const atomProj = tmp("jp-atom-");
+writeFileSync(join(atomProj, ".ja-proofread.json"), JSON.stringify({ profile: "doc" }));
+write(atomProj, "m.md", "# メモ\n\n網羅的に書きます。\n");
+const atomData = tmp("jp-atomdata-");
+if (existsSync(join(OUTER_DATA, "deps"))) symlinkSync(join(OUTER_DATA, "deps"), join(atomData, "deps"));
+const atomVictim = write(tmp("jp-atomvictim-"), "keep.json", "KEEP");
+symlinkSync(atomVictim, join(atomData, "hook-last.json"));
+r = run([S("hook-post-edit.mjs")], { input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: join(atomProj, "m.md") }, cwd: atomProj }), env: { CLAUDE_PROJECT_DIR: atomProj, JA_PROOFREAD_DATA: atomData } });
+ok("hook-last.json は置き換えて書く（リンク先は変えず、一時ファイルを残さない）", readFileSync(atomVictim, "utf8") === "KEEP" && !lstatSync(join(atomData, "hook-last.json")).isSymbolicLink() && Object.values(json(readFileSync(join(atomData, "hook-last.json"), "utf8"))).length === 1 && !readdirSync(atomData).some((f) => f.includes(".tmp-")), readFileSync(atomVictim, "utf8").slice(0, 100) + r.stderr.slice(0, 200));
+
+// 4. update の detect は丸ごと置き換わる。flags の m を落として ^ を使う正規表現は止め、ほかに消えた項目は知らせる
+const p2now = ledger.patterns.find((p) => p.id === "P002").detect;
+unchanged("update で P002 の flags の m を落とすと止まる", [{ action: "update", id: "P002", detect: { type: "regex-count", pattern: p2now.pattern, threshold: { minCount: 10, per1000: 4 } } }]);
+const uRepo = tmp("jp-urepo-");
+const uLedgerJs = makeRepo(uRepo);
+writeFileSync(appr, JSON.stringify([{ action: "update", id: "P002", detect: { type: "regex-count", pattern: p2now.pattern, flags: "m", threshold: { minCount: 10 } } }]));
+r = run([uLedgerJs, "apply", appr]);
+const uP2 = safe(() => json(readFileSync(join(uRepo, "plugins/ja-proofread/data/ledger.json"), "utf8")).patterns.find((p) => p.id === "P002").detect);
+ok("flags を書いた update は通り、書き忘れた threshold.per1000 は「注意：」で知らせる", r.status === 0 && uP2?.flags === "m" && uP2?.threshold?.minCount === 10 && /注意：.*threshold\.per1000/.test(r.stdout), r.stdout + r.stderr);
+const glSkill = readFileSync(join(ROOT, "skills/grow-ledger/SKILL.md"), "utf8");
+ok("grow-ledger の update の例に flags と per1000 があり、丸ごと置き換わると書いてある", /"action": "update", "id": "P002", "detect": \{[^}]*"flags": "m"[^}]*"per1000": 4/.test(glSkill) && /丸ごと置き換わります/.test(glSkill));
+
+// 参考. targets を使う辞書：警告は「辞書ごと」の1つだけ。targets の file は長さ0で一致してもよい
+if (hasDeps) {
+  const tgBad = prhProj("version: 1\ntargets:\n  - file: /\\.md$/\nrules:\n  - expected: 危ない語\n    pattern: /(?:あ+)+い/\n  - expected: 正しい語\n    pattern: ただしいご\n");
+  const tgBadRep = proofread(write(tgBad, "d.md", "# 語\n\nただしいごを書きます。\n"), [], { cwd: tgBad, timeout: 60000 });
+  const tgw = tgBadRep.warnings || [];
+  ok("targets を使う辞書で規則が外れるときの警告は「辞書ごと外しました」の1つだけ", tgw.length === 1 && /辞書ごと外しました/.test(tgw[0]) && !tgw.some((w) => /その規則だけ/.test(w)), JSON.stringify(tgw));
+  const tgEmpty = prhProj("version: 1\ntargets:\n  - file: /.*/\nrules:\n  - expected: 正しい語\n    pattern: ただしいご\n");
+  const tgEmptyRep = proofread(write(tgEmpty, "d.md", "# 語\n\nただしいごを書きます。\n"), [], { cwd: tgEmpty, timeout: 60000 });
+  ok("targets の file: /.*/（長さ0で一致し得る）は拒否せず、辞書を使う", !(tgEmptyRep.warnings || []).length && prhMsgs(tgEmptyRep).some((m) => /正しい語/.test(m)), JSON.stringify(tgEmptyRep.warnings) + JSON.stringify(prhMsgs(tgEmptyRep)));
+}
+
+// 12. 一時ディレクトリを残さない（このテストが作ったものは、ここで消す）
+cleanup();
+const leftover = readdirSync(tmpdir()).filter((f) => /^(jp-|ja-proofread-)/.test(f) && !tmpBefore.has(f));
+ok("テストが作った一時ディレクトリ（jp-*、ja-proofread-*）は終わりに消える", leftover.length === 0, leftover.slice(0, 5).join(","));
 
 console.log(failed ? `\n${passed + failed} 項目中 ${failed} 件失敗` : `\n${passed} 項目すべて成功`);
 process.exit(failed ? 1 : 0);

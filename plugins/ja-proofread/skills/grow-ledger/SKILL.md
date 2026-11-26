@@ -82,10 +82,12 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/stylometry.mjs" compare --baseline 基準.js
   { "notionPageId": "…", "action": "add", "name": "候補名", "category": "構成", "level": "should",
     "detect": { "type": "structure", "detector": "triplets", "threshold": { "minCount": 3 } }, "guidance": "直し方" },
   { "notionPageId": "…", "action": "retire", "id": "P010" },
-  { "notionPageId": "…", "action": "update", "id": "P002", "detect": { "type": "regex-count", "pattern": "…", "threshold": { "minCount": 10 } } },
+  { "notionPageId": "…", "action": "update", "id": "P002", "detect": { "type": "regex-count", "pattern": "…", "flags": "m", "threshold": { "minCount": 10, "per1000": 4 } } },
   { "notionPageId": "…", "action": "prh", "expected": "問い合わせ", "patterns": ["問合せ"], "reason": "…" }
 ]
 ```
+
+   `update` の `detect` は、項目ごとに足すのではなく丸ごと置き換わります。変えない項目（`flags`、`threshold` の残りの値、`detector` など）も、今の台帳（`data/ledger.json`。`ledger.mjs list` には出ません）の値をそのまま書きます。上の例は P002 の `minCount` だけを変えるもので、今の `"flags": "m"` と `"per1000": 4` も書いています。`flags` の `m` が無くなり、正規表現が `^` や `$` を使っているときは、意味が変わる（行の先頭ではなく文書の先頭にしか当たらなくなる）ため、反映は止まります。ほかの項目が無くなったときは、反映したあとに「注意：」の行で知らせます。
 
    列と項目の対応は次のとおりです。
 

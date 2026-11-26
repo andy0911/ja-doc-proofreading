@@ -126,7 +126,10 @@ function topAlternatives(content) {
 }
 
 // 選択肢がどれも1文字か文字クラス1つで、どの2つも同じ文字に当たらないか。
-// 当たる文字は、すべての文字（u なしは UTF-16 の0〜FFFF、u ありは0〜10FFFF）を実際に当てて確かめる
+// 当たる文字は、実際に当てて確かめる。u なしは UTF-16 の0〜FFFF。u ありでも、選択肢に BMP の外の文字に当たり得るもの
+// （. \S \W \D \p \P 否定の文字クラス \u{…} サロゲートの \uD800〜\uDFFF BMP の外の文字そのもの）が無ければ、
+// 0〜FFFFだけを当てる（BMP の外の文字には、どの選択肢も当たらないため）
+const ASTRAL_CAPABLE = /\.|\\[SWDpP]|\[\^|\\u\{|\\u[dD][89a-fA-F]|[\uD800-\uDFFF]/;
 const disjointMemo = new Map();
 export function simpleDisjointAlternation(content, flags = "") {
   const f = [...new Set(String(flags).replace(/[^isu]/g, ""))].join("");
@@ -138,9 +141,10 @@ export function simpleDisjointAlternation(content, flags = "") {
     try {
       const res = parts.map((p) => new RegExp(`^(?:${p})$`, f));
       const u = f.includes("u");
-      const max = u ? 0x10ffff : 0xffff;
+      const max = u && parts.some((p) => ASTRAL_CAPABLE.test(p)) ? 0x10ffff : 0xffff;
       ok = true;
       for (let cp = 0; cp <= max && ok; cp++) {
+        // u ありで BMP の中だけを当てるときも、サロゲートの半分は1文字として当てる（u ありの [^…] などと同じ扱い）
         const s = u ? String.fromCodePoint(cp) : String.fromCharCode(cp);
         let n = 0;
         for (const re of res) if (re.test(s) && ++n > 1) { ok = false; break; }
@@ -152,9 +156,12 @@ export function simpleDisjointAlternation(content, flags = "") {
 }
 
 // 形の問題を探す。入れ子の繰り返し、繰り返すグループの中の選択。問題がなければ null
-// own：そのグループ自身の | 、deep：中のグループから伝わった | （重ならない1文字の選択は文字クラスと同じに扱い、伝えない）
+// own：そのグループ自身の | 、deep：中のグループから伝わった、重なり得る | 、
+// cands：中のグループから伝わった、重ならない1文字の選択かもしれない | （確かめるのは、繰り返すグループに入っていると分かったときだけ。
+// 重ならないかを当てて確かめるのは時間がかかるため、繰り返さないグループでは確かめない）
 export function shapeProblem(src, flags = "") {
-  const stack = [{ rep: false, own: false, deep: false, start: 0 }];
+  const frame = (start) => ({ rep: false, own: false, deep: false, cands: [], start });
+  const stack = [frame(0)];
   for (let i = 0; i < src.length; i++) {
     const c = src[i];
     if (c === "\\") { i++; continue; }
@@ -171,19 +178,24 @@ export function shapeProblem(src, flags = "") {
         const m = /^\?(?::|=|!|<=|<!|<[A-Za-z_$][\w$]*>)/.exec(src.slice(i + 1));
         if (m) { i += m[0].length; start = i + 1; }
       }
-      stack.push({ rep: false, own: false, deep: false, start });
+      stack.push(frame(start));
       continue;
     }
     if (c === ")") {
-      const g = stack.length > 1 ? stack.pop() : { rep: false, own: false, deep: false, start: i };
+      const g = stack.length > 1 ? stack.pop() : frame(i);
       const q = quantAt(src, i + 1);
       const repeated = !!q && q.max > 1;
-      const simple = g.own && !g.deep && !g.rep && simpleDisjointAlternation(src.slice(g.start, i), flags);
-      const hasAlt = (g.own && !simple) || g.deep;
+      // このグループ自身の | が、重ならない1文字の選択の候補か（候補でなければ、重なり得る選択）
+      const cand = g.own && !g.deep && !g.rep ? src.slice(g.start, i) : null;
+      const deep = g.deep || (g.own && cand === null);
+      const cands = cand === null ? g.cands : [...g.cands, cand];
       if (repeated && g.rep) return "nested";
-      if (repeated && hasAlt) return "alternation";
-      if (g.rep || repeated) stack[stack.length - 1].rep = true;
-      if (hasAlt) stack[stack.length - 1].deep = true; // 中の選択は外のグループにも残る（(?:(?:a|aa))+ も拒否する）
+      if (repeated && (deep || cands.some((x) => !simpleDisjointAlternation(x, flags)))) return "alternation";
+      const parent = stack[stack.length - 1];
+      if (g.rep || repeated) parent.rep = true;
+      // 中の選択は外のグループにも残る（(?:(?:a|aa))+ も拒否する）。繰り返して確かめ終えた候補は、もう伝えない
+      if (deep) parent.deep = true;
+      if (!repeated) parent.cands.push(...cands);
       if (q) i += q.len;
       continue;
     }
@@ -271,8 +283,9 @@ function probe(pattern, flags) {
   return { ms, empty };
 }
 
-// 形と書き方だけを確かめる（速い）。問題の説明の配列を返す（問題がなければ空）
-export function checkShape(pattern, flags = "") {
+// 形と書き方だけを確かめる（速い）。問題の説明の配列を返す（問題がなければ空）。
+// allowEmpty：長さ0の一致を問題にしない（prh の targets の file のように、本文ではなくファイルのパスに当てるもの）
+export function checkShape(pattern, flags = "", { allowEmpty = false } = {}) {
   if (typeof pattern !== "string" || !pattern) return ["正規表現が空です"];
   const raw = String(flags ?? "");
   if (!/^[gimsu]*$/.test(raw)) return [`flags に使えるのは i m s u だけです（${flags}）`];
@@ -282,22 +295,30 @@ export function checkShape(pattern, flags = "") {
   const shape = shapeProblem(pattern, f);
   if (shape === "nested") return ["繰り返しの中に繰り返しがあります（(あ+)+ のような形）。長い文で止まるおそれがあるため使えません"];
   if (shape === "alternation") return ["繰り返すグループの中に | があります（(?:漢|漢字?)+ のような形）。選択肢が重なると長い文で止まるおそれがあるため使えません。[漢字] のような文字クラスにするか、繰り返しの外で選んでください（選択肢がどれも1文字か文字クラス1つで、互いに同じ文字に当たらないときは使えます）"];
-  if (minLength(pattern) === 0) return ["長さ0の文字列に一致し得ます（空文字、? や * だけの形、先読み・後読みだけの形など）"];
+  if (!allowEmpty && minLength(pattern) === 0) return ["長さ0の文字列に一致し得ます（空文字、? や * だけの形、先読み・後読みだけの形など）"];
   return [];
 }
 
+// 測れなかった（子プロセスや worker が止まった）結果の印。一時的な失敗かもしれないので、記録には残さない
+export function unmeasured(why) {
+  const out = [`時間を測れませんでした（${String(why).slice(0, 200)}）`];
+  Object.defineProperty(out, "transient", { value: true });
+  return out;
+}
+
 // 時間を測った結果を、問題の説明の配列にする
-function verdict(res) {
+function verdict(res, item = {}) {
   if (res.timeout) return [`長い繰り返しの文字列で ${KILL_MS / 1000} 秒以内に終わりませんでした`];
-  if (res.error) return [`時間を測れませんでした（${String(res.error).slice(0, 200)}）`];
+  if (res.error) return unmeasured(res.error);
   const errors = [];
-  if (res.empty) errors.push("長さ0の文字列に一致します（空文字や先読みだけの形）");
+  if (res.empty && !item.allowEmpty) errors.push("長さ0の文字列に一致します（空文字や先読みだけの形）");
   if (res.ms > MAX_MS) errors.push(`長い繰り返しの文字列で ${res.ms.toFixed(0)}ms かかりました（上限 ${MAX_MS}ms）`);
   return errors;
 }
 
-// 時間だけを測る。items は形の検査を通った { source, flags } の配列。
-// 返すのは items と同じ並びの配列で、各要素は問題の説明の配列、または null（budgetMs のうちに測り終えなかったもの）
+// 時間だけを測る。items は形の検査を通った { source, flags, allowEmpty? } の配列。
+// 返すのは items と同じ並びの配列で、各要素は問題の説明の配列、または null（budgetMs のうちに測り終えなかったもの）。
+// 子プロセスが止まって測れなかったものは、transient の印がついた配列（unmeasured）になる
 export function measureRegexes(items, { budgetMs } = {}) {
   const results = new Array(items.length).fill(undefined);
   const flagsOf = (x) => String(x.flags || "").replace("g", "");
@@ -318,7 +339,7 @@ export function measureRegexes(items, { budgetMs } = {}) {
       let o;
       try { o = JSON.parse(line); } catch { continue; }
       if (o.done) { done = o; continue; }
-      if (Number.isInteger(o.i) && o.i >= 0 && start + o.i < items.length && results[start + o.i] === undefined) results[start + o.i] = verdict(o);
+      if (Number.isInteger(o.i) && o.i >= 0 && start + o.i < items.length && results[start + o.i] === undefined) results[start + o.i] = verdict(o, items[start + o.i]);
     }
     let first = start;
     while (first < items.length && results[first] !== undefined) first++;
@@ -326,7 +347,7 @@ export function measureRegexes(items, { budgetMs } = {}) {
     if (done && done.budget) break; // 時間切れ。残りは測っていない
     if (!done || first === start) {
       // 子プロセスが途中で止まった。測り終えなかった最初の1件は拒否して、その次から続ける
-      results[first] = [`時間を測れませんでした（${(r.error?.message || r.signal || (r.stderr || "").trim().slice(0, 200) || "子プロセスが止まりました")}）`];
+      results[first] = unmeasured(r.error?.message || r.signal || (r.stderr || "").trim().slice(0, 200) || "子プロセスが止まりました");
       start = first + 1;
     } else start = first;
   }
@@ -335,7 +356,7 @@ export function measureRegexes(items, { budgetMs } = {}) {
 
 // 正規表現をまとめて確かめる。list は { source, flags } の配列。返すのは同じ並びで、問題の説明の配列か null（時間切れ）
 export function checkRegexes(list, { budgetMs } = {}) {
-  const out = list.map((x) => checkShape(x.source, x.flags));
+  const out = list.map((x) => checkShape(x.source, x.flags, x));
   const todo = [];
   out.forEach((p, k) => { if (!p.length) todo.push(k); });
   if (todo.length) {
@@ -353,9 +374,11 @@ export function checkRegex(pattern, flags = "") {
 // 検査の中身が変わったら、記録しておいた結果を使い直さないための印
 export const CHECKER_ID = createHash("sha256").update(readFileSync(SELF)).digest("hex").slice(0, 12);
 
-// 記録に使う鍵。検査の版・正規表現・flags から作る
-export function regexKey(source, flags = "") {
-  return createHash("sha256").update(CHECKER_ID).update("\0").update(String(source)).update("\0").update(String(flags || "").replace("g", "")).digest("hex").slice(0, 32);
+// 記録に使う鍵。検査の版・正規表現・flags（と、長さ0を許すか）から作る
+export function regexKey(source, flags = "", { allowEmpty = false } = {}) {
+  const h = createHash("sha256").update(CHECKER_ID).update("\0").update(String(source)).update("\0").update(String(flags || "").replace("g", ""));
+  if (allowEmpty) h.update("\0allowEmpty");
+  return h.digest("hex").slice(0, 32);
 }
 
 const emit = (o) => writeSync(1, JSON.stringify(o) + "\n");

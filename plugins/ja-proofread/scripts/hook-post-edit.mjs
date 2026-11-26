@@ -3,11 +3,17 @@
 // プロジェクトに .ja-proofread.json があるときだけ動く（コードのリポジトリで README を直すたびに口を出さないため）。
 // Claude に直させる（block）のは、前回の結果になかった指摘のうち、重さが hook.blockOn 以上のものがあるときだけ。
 // 既存の文書にもともとある指摘のために、関係ない編集のたびに止め続けないため。
-import { existsSync, statSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, statSync, readFileSync, writeFileSync, renameSync, rmSync } from "node:fs";
+import { performance } from "node:perf_hooks";
 import { resolve, join } from "node:path";
 import { ROOT, loadProjectConfig, matchesAny, toRel, proofreadFiles, summarize, dataDir, fileKey } from "./lib.mjs";
 
 export const MAX_BYTES = 200 * 1024;
+// フックの時間の上限（hooks.json と install-into-project.mjs の timeout と同じ）。これを超えると Claude Code が黙って打ち切るので、
+// 起動してからの時間を引き、結果を返す余裕を残して、prh の辞書の検査と textlint を締め切りまでに収める
+export const HOOK_TIMEOUT_MS = 60000;
+const HOOK_MARGIN_MS = 6000;
+const deadline = Math.round(performance.timeOrigin) + HOOK_TIMEOUT_MS - HOOK_MARGIN_MS;
 const ORDER = { must: 0, should: 1, info: 2 };
 const FOOTER = "\n\n指摘は機械的な候補です。直す前に文脈を確かめ、誤検知なら ja-proofread の grow-ledger スキルで誤検知として記録してください。";
 
@@ -47,7 +53,7 @@ function main(input) {
     context(`ja-proofread: ${rel} は ${Math.round(size / 1024)}KB あり、書いた直後の校正の上限（${MAX_BYTES / 1024}KB）を超えるため飛ばしました。校正するときは proofread スキルを使ってください。`);
     return;
   }
-  const report = proofreadFiles([abs], { cfg });
+  const report = proofreadFiles([abs], { cfg, deadline });
   const s = summarize(report, { max: 25 });
   const findings = report.files[0]?.findings || [];
 
@@ -94,7 +100,10 @@ function newFindings(abs, findings, { lintFailed = false } = {}) {
   // 古いものから捨て、500ファイル分までにする
   const keys = Object.keys(state).sort((a, b) => (state[b].at || 0) - (state[a].at || 0));
   for (const k of keys.slice(500)) delete state[k];
-  try { writeFileSync(path, JSON.stringify(state)); } catch { /* 保存できなくても校正の結果は返す */ }
+  // 一時ファイルに書いてから置き換える（書いている途中で打ち切られても、前回の結果が壊れないため）
+  const tmp = `${path}.tmp-${process.pid}`;
+  try { writeFileSync(tmp, JSON.stringify(state)); renameSync(tmp, path); }
+  catch { try { rmSync(tmp, { force: true }); } catch { /* 消せなくても続ける */ } /* 保存できなくても校正の結果は返す */ }
   return fresh;
 }
 

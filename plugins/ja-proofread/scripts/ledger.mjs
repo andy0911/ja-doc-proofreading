@@ -125,6 +125,31 @@ export function validatePrh(parsed) {
   return errors;
 }
 
+// 正規表現が行の先頭・末尾（^ $）を使うか（エスケープと文字クラスの中は除く）
+export function usesLineAnchor(src) {
+  for (let i = 0; i < String(src).length; i++) {
+    const c = src[i];
+    if (c === "\\") { i++; continue; }
+    if (c === "[") { for (i++; i < src.length && src[i] !== "]"; i++) if (src[i] === "\\") i++; continue; }
+    if (c === "^" || c === "$") return true;
+  }
+  return false;
+}
+
+// update の detect は丸ごと置き換わる。書き忘れて消える項目を探す。
+// 返すのは { errors（m が消えて ^ $ の意味が変わるもの）, notes（ほかに消える項目） }
+export function droppedDetectKeys(oldDetect = {}, newDetect = {}, id = "") {
+  const errors = [], notes = [];
+  const oldF = String(oldDetect.flags || ""), newF = String(newDetect.flags || "");
+  const lost = [...oldF].filter((c) => !newF.includes(c));
+  if (lost.includes("m") && usesLineAnchor(newDetect.pattern ?? "")) {
+    errors.push(`${id} の detect は丸ごと置き換わるため、今の flags「${oldF}」の m が無くなり、^ や $ が文書の先頭と末尾にしか当たらなくなります。変えないときも "flags": "${oldF}" を書いてください（m を外すつもりなら、^ $ を使わない形にしてください）`);
+  } else if (lost.length) notes.push(`flags の ${lost.join("")}`);
+  for (const k of Object.keys(oldDetect.threshold || {})) if (!(k in (newDetect.threshold || {}))) notes.push(`threshold.${k}`);
+  for (const k of ["detector"]) if (oldDetect[k] !== undefined && newDetect[k] === undefined) notes.push(k);
+  return { errors, notes: notes.length ? [`${id} の detect を丸ごと置き換えたため、次の項目が無くなりました：${notes.join("、")}。残すつもりだったなら approved.json に書いて反映し直してください`] : [] };
+}
+
 function bump(v, kind) {
   const [a, b, c] = v.split(".").map(Number);
   return kind === "minor" ? `${a}.${b + 1}.0` : `${a}.${b}.${c + 1}`;
@@ -212,6 +237,7 @@ if (cmd === "list") {
   let prhText = readFileSync(PRH, "utf8");
   if (!prhText.endsWith("\n")) prhText += "\n";
   const errors = [];
+  const notes = [];
   const applied = [];
   let kind = "patch";
   items.forEach((it, n) => {
@@ -240,7 +266,16 @@ if (cmd === "list") {
       const p = ledger.patterns.find((x) => x.id === it.id);
       if (!p) { errors.push(`${where}: ${it.id} は台帳にありません`); return; }
       if (action === "retire") p.status = "retired";
-      else for (const k of ["name", "category", "level", "detect", "guidance", "example", "profiles"]) if (it[k] !== undefined) p[k] = it[k];
+      else {
+        // update の detect は丸ごと置き換える。書き忘れて消える項目を確かめる（m が消えて ^ $ の意味が変わるものは止める）
+        if (it.detect !== undefined) {
+          if (!it.detect || typeof it.detect !== "object" || Array.isArray(it.detect)) { errors.push(`${where}: detect はオブジェクトにしてください`); return; }
+          const d = droppedDetectKeys(p.detect, it.detect, p.id);
+          errors.push(...d.errors.map((e) => `${where}: ${e}`));
+          notes.push(...d.notes);
+        }
+        for (const k of ["name", "category", "level", "detect", "guidance", "example", "profiles"]) if (it[k] !== undefined) p[k] = it[k];
+      }
       applied.push({ notionPageId: it.notionPageId, id: p.id, action });
     }
   });
@@ -283,6 +318,7 @@ if (cmd === "list") {
   for (const [t, p] of tmps) renameSync(t, p);
   console.log(`台帳を v${newVersion} にしました`);
   console.log(lines.join("\n"));
+  for (const n of notes) console.log(`注意：${n}`);
   console.log("\nNotion に書き戻す対応表（状態は、プルリクエストを出したら「PR中」、マージしたら「反映済み」）：\n" + JSON.stringify(applied.map((a) => ({ ...a, version: newVersion })), null, 2));
 } else {
   console.error("使い方: node ledger.mjs list | validate | fp <型ID> --text … | stats | apply <approved.json>");

@@ -110,7 +110,7 @@ node "$P/scripts/ledger.mjs" stats
 
 ## 6. 新しい版にする
 
-Anthropic が運営するもの以外のマーケットプレイスは、自動更新が既定でオフです。このマーケットプレイスもオフです。台帳が育ってバージョンが上がったら、次を実行して Claude Code を起動し直します。起動中のセッションでは、`/reload-plugins` を実行しても新しい版に切り替わります。
+自分で足したマーケットプレイスは、自動更新が既定でオフです（このマーケットプレイスも）。既定でオンなのは、Anthropic の公式のマーケットプレイス（`claude-plugins-official` など）と、claude.ai から足したマーケットプレイスです（[Which marketplaces and plugins auto-update](https://code.claude.com/docs/en/plugins/loading#which-marketplaces-and-plugins-auto-update)）。台帳が育ってバージョンが上がったら、次を実行して Claude Code を起動し直します。起動中のセッションでは、`/reload-plugins` を実行しても新しい版に切り替わります。
 
 ```bash
 claude plugin marketplace update ja-doc-proofreading
@@ -121,7 +121,7 @@ claude plugin update ja-proofread@ja-doc-proofreading
 
 ## 7. 仲間にも使ってもらう
 
-プロジェクトの `.claude/settings.json` に次を書いてコミットします。仲間がそのフォルダを信頼すると、マーケットプレイスが登録され、プラグインも有効になります。提案が出るのではなく、自動で入ります。このプラグインはマーケットプレイスの中に置いてある（相対パスで指している）ためです。仲間はそれぞれ「1. 非公開リポジトリを読めるようにする」を先に済ませておく必要があります。
+プロジェクトの `.claude/settings.json` に次を書いてコミットします。
 
 ```json
 {
@@ -134,7 +134,15 @@ claude plugin update ja-proofread@ja-doc-proofreading
 }
 ```
 
-自動で入らないとき（認証が通らなかったときなど）は、仲間が先に `claude plugin marketplace add andy0911/ja-doc-proofreading` を実行してから、Claude Code を起動し直します。
+仲間がそのフォルダーを信頼する（ワークスペースの信頼のダイアログで許可する）と、このマーケットプレイスが仲間の端末に登録されます。ただし、`enabledPlugins` で有効にしただけでは、プラグインは仲間の端末に入らず、起動しても読み込まれません（[Enabled in project settings but not installed](https://code.claude.com/docs/en/plugins/loading#enabled-in-project-settings-but-not-installed)）。仲間はそれぞれ、クローンごとに1回、そのプロジェクトで次を実行します。
+
+```bash
+claude plugin install ja-proofread@ja-doc-proofreading --scope project
+```
+
+入れたあと、新しいセッションを始めるか、`/reload-plugins` を実行すると読み込まれます。すべてのプロジェクトで使うなら `--scope project` の代わりに `--scope user` で入れます。入れずに今のセッションだけで試すなら、`/reload-plugins` でも読み込めます。このプラグインはマーケットプレイスの中に相対パスで置いてあるためで、読み込まれるのはそのセッションだけです（同じ Enabled in project settings but not installed）。入れていないときは、`/plugin` の Errors タブに `isn't installed here` で終わる行が出ます。
+
+仲間はそれぞれ「1. 非公開リポジトリを読めるようにする」を先に済ませておきます。マーケットプレイスが登録されないとき（フォルダーを信頼していない、認証が通らないなど）は、先に `claude plugin marketplace add andy0911/ja-doc-proofreading` を実行してから、上の install を実行します。
 
 ## 8. やめる
 
