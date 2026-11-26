@@ -1039,6 +1039,24 @@ ok("同梱したスキルに、プラグインのデータ置き場の説明が�
   const tam2 = sumsOk(kit);
   writeFileSync(join(kit, "kit.sha256"), sumsText);
   ok("kit の中の1文字の書き換えも、kit.sha256 の書き換えも、照らし合わせで見つかる", tam1.status !== 0 && /lib\.mjs: FAILED/.test(tam1.stdout) && tam2.status !== 0 && sumsOk(kit).status === 0, tam1.stdout + tam2.stdout);
+  // kit の中に node_modules の textlint を仕込まれても使わない（照らし合わせはあとから足したファイルを見つけない）。kit.json を消されても kit として動く
+  {
+    const evilKit = join(tmp("jp-kitevil-"), "ja-proofread-kit");
+    run([DIST, "--project-kit", evilKit]);
+    const pwned = join(tmp("jp-kitpwn-"), "pwned");
+    write(evilKit, "node_modules/textlint/bin/textlint.js", `require("fs").writeFileSync(${JSON.stringify(pwned)}, "x"); console.log("[]");\n`);
+    const ehome = tmp("jp-kitevilhome-");
+    const eenv = { ...BASE_ENV, HOME: ehome, JA_PROOFREAD_SKIP_INSTALL: "1" };
+    delete eenv.JA_PROOFREAD_DATA; delete eenv.XDG_CACHE_HOME;
+    const edoc = write(tmp("jp-kitevildoc-"), "doc.md", readFileSync(join(ROOT, "tests/fixtures/ai-like.md"), "utf8"));
+    const er1 = spawnSync(process.execPath, [join(evilKit, "scripts/proofread.mjs"), edoc], { encoding: "utf8", cwd: WORK, env: eenv });
+    ok("照らし合わせが通っても、kit の中の node_modules の textlint は使わない", sumsOk(evilKit).status === 0 && !existsSync(pwned) && /textlint/.test(er1.stdout + er1.stderr), er1.stdout.slice(0, 200) + er1.stderr.slice(0, 200));
+    rmSync(join(evilKit, "kit.json"));
+    const er2 = spawnSync(process.execPath, [join(evilKit, "scripts/proofread.mjs"), edoc], { encoding: "utf8", cwd: WORK, env: eenv });
+    ok("kit.json を消しても、照らし合わせに入る kit.sha256 で kit として動き、仕込んだ textlint を実行しない。記録の置き場も kit の隣のまま", sumsOk(evilKit).status === 0 && !existsSync(pwned) && existsSync(join(dirname(evilKit), "ja-proofread-data")) && !existsSync(join(ehome, ".cache/ja-proofread/hits.jsonl")), er2.stdout.slice(0, 200) + er2.stderr.slice(0, 200));
+    rmSync(join(evilKit, "kit.sha256"));
+    ok("kit.sha256 を消すと、照らし合わせが通らない", sumsOk(evilKit).status !== 0);
+  }
   // 空の HOME・既定のデータ置き場（環境変数なし）で動く。依存は ~/.cache の下、記録は kit の隣に残る
   const khome = tmp("jp-kithome-");
   mkdirSync(join(khome, ".cache/ja-proofread"), { recursive: true });
@@ -1074,9 +1092,9 @@ ok("同梱したスキルに、プラグインのデータ置き場の説明が�
   r = run([DIST, "--project-kit", half]);
   ok("kit.json がなく kit の名前のものだけが残ったディレクトリや、入れ替えの一時ディレクトリが残ったディレクトリにも書き直せる", r.status === 0 && existsSync(join(half, "kit.json")) && existsSync(join(half, "skills/write/SKILL.md")) && !existsSync(join(half, ".ja-proofread-kit-new-xyz")) && sumsOk(half).status === 0, r.stderr);
   // 危ない場所には書かない
-  const bad = [["/mnt/project-files", /使えません/], [join(pf, "notes"), /名前に kit が入っていません/], [join(pf, "a$b-kit"), /" \$ ` \\/], [join(pf, 'q"-kit'), /" \$ ` \\/], [homedir(), /使えません|名前に kit/]];
+  const bad = [["/mnt/project-files", /使えません/], [join(pf, "notes"), /kit という語が入っていません/], [join(pf, "toolkit"), /kit という語が入っていません/], [join(pf, "a$b-kit"), /" \$ ` \\/], [join(pf, 'q"-kit'), /" \$ ` \\/], [homedir(), /使えません|名前に kit/]];
   const badR = bad.map(([d, re]) => { const x = run([DIST, "--project-kit", d]); return x.status === 1 && re.test(x.stderr) ? "" : `${d}: ${x.status} ${x.stderr.slice(0, 120)}`; }).filter(Boolean);
-  ok("/mnt/project-files・HOME・名前に kit のない場所・\" $ ` を含むパスには書かない", badR.length === 0 && !existsSync(join(pf, "kit.json")), badR.join(" | "));
+  ok("/mnt/project-files・HOME・名前に kit という語のない場所（toolkit など）・\" $ ` を含むパスには書かない", badR.length === 0 && !existsSync(join(pf, "kit.json")), badR.join(" | "));
   const other = join(tmp("jp-kitother-"), "my-kit");
   write(other, "notes.md", "本人のメモ\n");
   r = run([DIST, "--project-kit", other]);

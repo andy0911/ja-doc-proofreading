@@ -15,17 +15,25 @@ export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 // データ置き場（依存・検出の記録・誤検知の記録・フックの前回結果）。
 // フックには CLAUDE_PLUGIN_DATA が渡る。スキルから動かすときは JA_PROOFREAD_DATA に同じ場所を渡す。
-// Projects 向けの kit（install-project-kit.mjs が書く）では、根に kit.json がある。記録の置き場は kit の隣の ja-proofread-data に決めてある
-// （kit.json の data の値は案内のためのもので、使わない。kit.json は照らし合わせの対象にしないため）。
+// Projects 向けの kit（install-project-kit.mjs が書く）かどうかは、根の kit.sha256（照らし合わせの一覧）か kit.json があるかで決める。
+// kit.json は照らし合わせに入らず、消されても照らし合わせは通るので、それだけには頼らない。kit.sha256 を消すと照らし合わせが通らない。
+// kit として動くときは、記録の置き場を kit の隣の ja-proofread-data に決め（kit.json の data の値は案内で、使わない）、
+// 根の中の node_modules を使わず、正規表現の検査の記録は共有の置き場でなくスレッドの中（既定の場所）に置く。
 // 記録はスレッドをまたいで残したいので /mnt/project-files の下に置き、依存（node_modules）は既定の場所（~/.cache）に入れる
 const defaultCache = () => join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "ja-proofread");
 const envData = () => process.env.JA_PROOFREAD_DATA || process.env.CLAUDE_PLUGIN_DATA || "";
 export const KIT_DATA_REL = "../ja-proofread-data";
 export function isKitRoot() {
-  try { return JSON.parse(readFileSync(join(ROOT, "kit.json"), "utf8"))?.name === "ja-proofread-kit"; } catch { return false; }
+  return existsSync(join(ROOT, "kit.sha256")) || existsSync(join(ROOT, "kit.json"));
 }
 function kitData() {
   return isKitRoot() ? resolve(ROOT, KIT_DATA_REL) : "";
+}
+// 安全の確認に使う記録（正規表現の検査の結果）の置き場。kit では、ほかのスレッドが書き換えられる共有の置き場を信じない
+export function checkCacheDir() {
+  const d = isKitRoot() ? (envData() || defaultCache()) : dataDir();
+  mkdirSync(d, { recursive: true });
+  return d;
 }
 export function dataDir() {
   const d = envData() || kitData() || defaultCache();
@@ -53,7 +61,7 @@ export function textlintBin() {
   const stamp = join(depsDir(), ".stamp");
   const inData = join(depsDir(), "node_modules", "textlint", "bin", "textlint.js");
   if (existsSync(stamp) && readFileSync(stamp, "utf8").trim() === depsHash() && existsSync(inData)) return inData;
-  // kit の中の node_modules は使わない（kit.sha256 の照らし合わせに入らず、共有フォルダーでほかのスレッドが置けるため）
+  // kit の中の node_modules は使わない（照らし合わせはあとから足したファイルを見つけず、共有フォルダーではほかのスレッドが置けるため）
   const inRoot = join(ROOT, "node_modules", "textlint", "bin", "textlint.js");
   if (!isKitRoot() && existsSync(inRoot)) return inRoot;
   return null;
@@ -276,7 +284,7 @@ export function prhPendingWarnings(state, budgetMs) {
   return out;
 }
 
-// 正規表現ごとの検査の記録（データ置き場の regex-checked.json）。通ったものも、拒否したものも残す。
+// 正規表現ごとの検査の記録（データ置き場の regex-checked.json。kit ではスレッドの中の既定の場所）。通ったものも、拒否したものも残す。
 // 鍵は検査の版・正規表現・flags なので、辞書の imports 先を含めて中身が変われば、変わった正規表現だけを測り直す。
 // 子プロセスが止まって測れなかったもの（一時的な失敗かもしれない）は残さず、次の校正で測り直す
 // 時間の上限は既定で20秒。遅い計算機やテストでは JA_PROOFREAD_PRH_BUDGET_MS（ミリ秒）で変えられる
@@ -289,7 +297,7 @@ export const PRH_BUDGET_MS = Number.isFinite(budgetEnv) && budgetEnv > 0 ? Math.
 const seconds = (ms) => `${Math.round(Math.max(0, ms) / 100) / 10}`;
 const CACHE_MAX = 20000;
 function regexCache() {
-  const path = join(dataDir(), "regex-checked.json");
+  const path = join(checkCacheDir(), "regex-checked.json");
   let data = readJSON(path, {});
   if (!isObject(data)) data = {};
   let dirty = false;

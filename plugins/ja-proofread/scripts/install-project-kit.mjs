@@ -12,7 +12,7 @@
 //
 // 消すのは、kit.json の files に並べた（kit が書いた）ファイルのうち、中身が変わっていないものだけ。
 // 本人が置いたファイルと、書いたあとに変わったファイルは残す（入れ替えで同じ名前に書くときは、元のファイルを別の名前で残す）。
-// 書くのは、まだないか空のディレクトリ、または前に書いた kit で、名前に kit を含むときだけ。
+// 書くのは、まだないか空のディレクトリ、または前に書いた kit で、名前に kit という語を含むときだけ。
 import { cpSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, rmdirSync, readdirSync, statSync, lstatSync, renameSync, mkdtempSync } from "node:fs";
 import { join, resolve, basename, dirname, relative, sep } from "node:path";
 import { homedir } from "node:os";
@@ -40,7 +40,7 @@ const kit = asPath ? resolve(asPath) : kitDir;
 const KIT_NAME = "ja-proofread-kit";
 // 記録（検出・誤検知・正規表現の検査の結果）の置き場。kit の隣に置き、kit を入れ替えても消さない
 const data = resolve(kit, KIT_DATA_REL);
-// kit が書く、kit の直下の名前。kit.json がなくても、直下がこれだけなら kit とみなす（入れ替えの途中で止まったときなど）
+// kit が書く、kit の直下の名前
 const TOP = new Set(["PROJECT-INSTRUCTIONS.md", "kit.json", "kit.sha256", "scripts", "rules", "data", "config", "templates", "skills", "agents", "package.json", "package-lock.json"]);
 // 照らし合わせ（kit.sha256）に入れないもの。kit.sha256 の値は PROJECT-INSTRUCTIONS.md に書き、kit.json にはそれ以外の全部の値を書くため
 const NOT_IN_SUMS = new Set(["kit.json", "kit.sha256", "PROJECT-INSTRUCTIONS.md"]);
@@ -64,7 +64,8 @@ const ROOTS = new Set(["/", "/mnt", "/mnt/project-files", "/tmp", resolve(homedi
 for (const [what, p] of [["kit の場所", kitDir], ["--as の場所", kit]]) {
   if (/["$`\\\r\n]/.test(p)) stop(`${what}（${p}）に " $ \` \\ や改行が入っています。手順の中でシェルに渡すので、これらを含まないパスにしてください。`);
   if (ROOTS.has(p)) stop(`${what}に ${p} は使えません。その下に kit 用のディレクトリを作って指定してください（例：/mnt/project-files/ja-proofread-kit）。`);
-  if (!/kit/i.test(basename(p))) stop(`${what}（${p}）の名前に kit が入っていません。ほかのファイルと混ざらないよう、名前に kit を含むディレクトリを指定してください（例：/mnt/project-files/ja-proofread-kit）。`);
+  // kit は区切られた語として入っていること（ja-proofread-kit、kit、my-kit。toolkit や kitchen は不可）
+  if (!/(^|[^a-z0-9])kit([^a-z0-9]|$)/i.test(basename(p))) stop(`${what}（${p}）の名前に、kit という語が入っていません。ほかのファイルと混ざらないよう、名前に kit を区切って含むディレクトリを指定してください（例：/mnt/project-files/ja-proofread-kit）。`);
 }
 if (asPath && basename(kit) !== basename(kitDir)) console.error(`注意：書く場所の名前（${basename(kitDir)}）と --as の名前（${basename(kit)}）が違います。アップロードしたあとの場所が --as と同じになるか確かめてください。`);
 if (resolve(ROOT) === kitDir) stop("kit の中のスクリプトからは実行できません。dist/ja-proofread-setup.mjs の --project-kit を使ってください。");
@@ -74,7 +75,8 @@ const entries = existsSync(kitDir) ? readdirSync(kitDir).filter((n) => !n.starts
 const current = existsSync(join(kitDir, "kit.json")) ? readJSON(join(kitDir, "kit.json"), null) : null;
 const hasKitJson = isObject(current) && current.name === KIT_NAME;
 const foreignKitJson = existsSync(join(kitDir, "kit.json")) && !hasKitJson;
-const looksKit = !hasKitJson && !foreignKitJson && entries.length > 0 && entries.every((n) => TOP.has(n));
+// kit.json がなくても、kit.sha256 があり、直下が kit の名前のものだけなら kit とみなす（入れ替えの途中で止まったときなど）
+const looksKit = !hasKitJson && !foreignKitJson && entries.includes("kit.sha256") && entries.every((n) => TOP.has(n));
 const isKit = hasKitJson || looksKit;
 if (entries.length && !isKit) {
   stop(`${kitDir} は空でなく、ja-proofread の kit（kit.json）でもないので、何も変えずに止めました。新しいディレクトリか、前に kit を書いたディレクトリを指定してください。`);

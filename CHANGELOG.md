@@ -1,5 +1,13 @@
 # 変更履歴
 
+## 0.1.12（2026-11-26）
+- 同梱の一式 `dist/ja-proofread-setup.mjs` の sha256：`3fb3f41cb2203c97f6d2638c4d530b3f6667a403dbde497b2d1b748ac1c06a1e`
+- 0.1.11 の再レビューの指摘を直した。台帳の型は変えていない（台帳の版は plugin.json とそろえて 0.1.12 にした）。
+- kit：kit の `kit.json` を消し、`kit/node_modules/textlint/bin/textlint.js` にコードを置くと、貼る部分の照らし合わせは通ったまま（`sha256sum -c` はあとから足したファイルを見つけない）、kit でないと判断されて、proofread がそのコードを動かしていた。kit かどうかを、照らし合わせに入る `kit.sha256` か `kit.json` があるかで決めるようにした（`kit.sha256` を消すと照らし合わせが通らない）。kit として動くときは、根の中の `node_modules` を決して使わず、記録の置き場は `kit.json` に頼らず kit の隣の `ja-proofread-data` にする。
+- kit：正規表現の検査の記録（`regex-checked.json`）は、kit として動くときは共有の記録の置き場でなく、スレッドの中の既定の場所（`~/.cache/ja-proofread`）に置く。共有の置き場はほかのスレッドが書き換えられ、追加の prh 辞書の安全の確認を飛ばせるため。
+- kit：`kit.json` がなく直下が kit の名前のものだけのディレクトリを kit とみなすのは、`kit.sha256` があるときだけにした。kit の場所の名前は、`kit` が区切られた語として入っているもの（`ja-proofread-kit`・`kit`・`my-kit` など）に限った（`toolkit` などは断る）。
+- 文書：install-projects.md の照らし合わせの説明で、プロジェクト指示は「スレッドからは変えられない」と書いていたのを直した（公式の説明では、プロジェクトの会話で Claude に頼めばプロジェクト指示を変えられる。スレッドが変えられるかは確かめていない）。kit.json を消されても kit として動くこと、正規表現の検査の記録の置き場、0.1.10 で書いた kit から上げるときは書き換えたファイルも退避せず上書きすることを書いた。
+
 ## 0.1.11（2026-11-26）
 - 同梱の一式 `dist/ja-proofread-setup.mjs` の sha256：`67f4c8896e6bb2cf9ca33862b08aa1053e4adc5cfe339c25f6bd7f750f81bdf6`
 - 0.1.10 の独立レビューの指摘を直した。台帳の型は変えていない（台帳の版は plugin.json とそろえて 0.1.11 にした）。
