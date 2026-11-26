@@ -46,10 +46,13 @@ function removeVendored() {
   }
 }
 
-// 書く前に、元の settings.json を settings.json.bak に残す
-function writeSettings(settings) {
+// 書く前に、同梱のフックが入っていない settings.json を settings.json.bak に残す。
+// すでにフックが入っている settings.json（2回目の同梱や --remove の前）は .bak にしない。
+// 上書きすると、.bak がフック入りの設定になり、元に戻す役に立たなくなるため
+const hasOurHooks = (st) => Object.values(st?.hooks || {}).some((gs) => Array.isArray(gs) && gs.some((g) => (g.hooks || []).some((h) => (h.command || "").includes(MARK))));
+function writeSettings(settings, original) {
   mkdirSync(claudeDir, { recursive: true });
-  if (existsSync(settingsPath)) copyFileSync(settingsPath, settingsPath + ".bak");
+  if (existsSync(settingsPath) && !hasOurHooks(original)) copyFileSync(settingsPath, settingsPath + ".bak");
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
 }
 
@@ -71,12 +74,14 @@ if (existsSync(settingsPath)) {
     process.exit(1);
   }
 }
+const original = JSON.parse(JSON.stringify(settings));
 removeHooks(settings);
 removeVendored();
 
 if (remove) {
-  if (existsSync(settingsPath)) writeSettings(settings);
-  console.log("同梱をやめました（.ja-proofread.json は残しています。元の settings.json は settings.json.bak にあります）");
+  if (existsSync(settingsPath)) writeSettings(settings, original);
+  const bak = existsSync(settingsPath + ".bak") ? "同梱する前の settings.json は settings.json.bak にあります（同梱のフックが入る前の、最後の状態です）" : "settings.json.bak はありません";
+  console.log(`同梱をやめました（.ja-proofread.json は残しています。${bak}）`);
   process.exit(0);
 }
 
@@ -96,6 +101,11 @@ for (const name of readdirSync(join(ROOT, "skills"))) {
     .replace(/^name:\s*(.+)$/m, `name: ${SKILL_PREFIX}$1`)
     .replaceAll('JA_PROOFREAD_DATA="${CLAUDE_PLUGIN_DATA}" ', "")
     .replace(/頭の `JA_PROOFREAD_DATA=…` は[^。]*。(?:外すと[^。]*。)?/g, "")
+    // プラグインとして入れたときだけの案内は消す（同梱した版から install-into-project は動かせないため）
+    .replace(/[ \t]*<!-- plugin-only -->[\s\S]*?<!-- \/plugin-only -->\n?/g, "")
+    // 同梱したサブエージェントは、プラグインの接頭辞なしの名前で呼ぶ
+    .replace(/\bja-proofread:(structure-reviewer|fresh-eyes-reader)\b/g, "$1")
+    .replace(/（呼ぶときは、この接頭辞つきの名前で指定します）/g, "")
     .replaceAll("${CLAUDE_PLUGIN_ROOT}", "${CLAUDE_SKILL_DIR}/../../ja-proofread");
   if (out.includes("${CLAUDE_PLUGIN_")) {
     console.error(`skills/${name}/SKILL.md に、同梱先で置き換えられない \${CLAUDE_PLUGIN_…} が残っています。`);
@@ -115,7 +125,7 @@ const cmd = (s, extra = "") => `node "$CLAUDE_PROJECT_DIR/${MARK}${s}"${extra}`;
 settings.hooks = settings.hooks || {};
 (settings.hooks.SessionStart ||= []).push({ matcher: "startup|resume", hooks: [{ type: "command", command: cmd("ensure-deps.mjs", " --quiet"), timeout: 300 }] });
 (settings.hooks.PostToolUse ||= []).push({ matcher: "Write|Edit|MultiEdit", hooks: [{ type: "command", command: cmd("hook-post-edit.mjs"), timeout: 60 }] });
-writeSettings(settings);
+writeSettings(settings, original);
 
 // 5. プロジェクトの設定（無いときだけ作る。フックはこのファイルがあるときだけ動く）
 const cfgPath = join(target, ".ja-proofread.json");

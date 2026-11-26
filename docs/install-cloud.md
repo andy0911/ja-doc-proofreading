@@ -6,7 +6,7 @@
 |---|---|---|
 | claude.ai/code で、リポジトリを1つだけ選んだセッション | 方法A（リポジトリに同梱） | コンテナの中の CLI で確認。実際のセッションでは未確認 |
 | claude.ai/code で、リポジトリを複数選んだセッション | 方法A。ただしフックは動かない | 未確認 |
-| claude.ai の Projects のスレッド | 方法Aは使えない。方法Bの2か3 | 未確認 |
+| claude.ai の Projects のスレッド | 方法Aは使えない。方法Bの2か3。Remote Control で自分のコンピューターで動かせば、手元のプラグインが使える可能性がある（下の B4） | 未確認 |
 
 クラウドセッションは、毎回まっさらなコンテナでリポジトリを開きます。手元で入れたプラグインは持ち込まれません。公式の説明では、リポジトリの設定やユーザー設定で有効にしたプラグインも読み込まれません。読まれるのは、リポジトリの `.claude/skills/`、`.claude/agents/`、`.claude/commands/`、`CLAUDE.md` です。`.claude/settings.json` の `hooks` は、リポジトリを1つだけ選んだセッションでだけ読まれます（[What carries over from your setup](https://code.claude.com/docs/en/cloud-environments#what-carries-over-from-your-setup)）。
 
@@ -62,14 +62,23 @@ git push
 
 ### 3. クラウドセッションを開く
 
-1. そのリポジトリだけを選んでセッションを始めます。複数のリポジトリを選ぶと、`.claude/settings.json` のフックは読まれません。そのときスキルとサブエージェントが使えるかは、公式の説明では確かめられていません。
+1. そのリポジトリだけを選んでセッションを始めます。複数のリポジトリを選ぶと、`.claude/settings.json` のフックは読まれません。SessionStart のフックも動かないので、依存は proofread スキルの準備（`ensure-deps.mjs`）で入れることになります（未確認）。そのときスキルとサブエージェントが使えるかは、公式の説明では確かめられていません。
 2. 環境のネットワーク設定は「Trusted」（既定）のままにします。Trusted には registry.npmjs.org が入っていて、最初に textlint を入れるのに使います。「None」にすると textlint は動きませんが、構成の型のチェックと台帳の語句チェックの一部は動きます。
 3. 最初の起動で依存が入ります（数十秒）。入れる先はコンテナの中なので、セッションのたびに入れ直します。入れられなかったときは、その旨が Claude と画面に出ます。
 4. 「この文書を校正して」と頼むか、`/ja-proofread-proofread` を呼びます。
 
 ### 新しい版にする
 
-台帳が育ってマーケットプレイスの版が上がったら、1と2をもう一度実行します。同梱した部品は最新版に入れ替わり、フックは重複しません。
+台帳が育ってマーケットプレイスの版が上がったら、先に手元のマーケットプレイスを最新にします。古いままの場所から同梱し直すと、古い版が入ります。
+
+```bash
+# 手元にプラグインを入れているとき
+claude plugin marketplace update ja-doc-proofreading
+# クローンした作業コピーを使うとき
+git -C ja-doc-proofreading pull
+```
+
+そのあと1と2をもう一度実行します。同梱した部品は最新版に入れ替わり、フックは重複しません。同梱した版（`.claude/ja-proofread/scripts/`）の install-into-project.mjs からは実行できないので、必ず作業コピーかインストールしたプラグインの場所のものを使います。
 
 ### やめる
 
@@ -77,7 +86,18 @@ git push
 node <プラグインの場所>/scripts/install-into-project.mjs <対象のリポジトリ> --remove
 ```
 
-フックと部品が消えます。`.ja-proofread.json` は残すので、要らなければ手で消します。
+フックと部品が消えます。`.ja-proofread.json` は残すので、要らなければ手で消します。消えたことをリポジトリにも反映するため、コミットしてプッシュします。
+
+```bash
+cd <対象のリポジトリ>
+git add -A -- .claude/ja-proofread '.claude/skills/ja-proofread-*' '.claude/agents/ja-proofread-*' .claude/settings.json
+git commit -m "ja-proofread の同梱をやめる"
+git push
+```
+
+### 注意：プラグインと同梱を両方使うと、記録が分かれる
+
+手元でプラグインを入れたまま、同梱したリポジトリを開くと、書いた直後の校正は同梱した版が受け持ち、プラグイン側のフックは黙ります。ただし、データ置き場が別になります。プラグインのスキルはプラグインのデータ置き場（`~/.claude/plugins/data/ja-proofread-ja-doc-proofreading/`）を、同梱した版のフックとスキルは既定の場所（`~/.cache/ja-proofread/`）を使います。そのため、検出の記録・誤検知の記録・フックの前回の結果が2か所に分かれ、`ledger.mjs stats` の数はそれぞれの場所の分だけになります。手元ではどちらか一方を使うか、スクリプトを手で動かすときに `JA_PROOFREAD_DATA` で見たい方の場所を指定します。
 
 ## 方法B：リポジトリに同梱しない（どれも確かめていない）
 
@@ -92,6 +112,10 @@ Projects では、プラグインをプロジェクトの設定（Project settin
 ### B3. claude.ai のアカウントのスキル
 
 claude.ai のアカウントで有効にしたスキルは、クラウドセッションでも読み込まれると説明されています（[Skills](https://code.claude.com/docs/en/skills)、[Claude Projects](https://code.claude.com/docs/en/claude-projects)）。ただし入るのはスキルだけで、フックと textlint は入りません。このプラグインのスキルはスクリプトを `${CLAUDE_PLUGIN_ROOT}` で指しているので、そのままアップロードしても機械チェックは動かないはずです（試していません）。台帳を読んで書く `write` スキルの考え方だけを使う、という使い方になります。
+
+### B4. Projects のスレッドを Remote Control で自分のコンピューターで動かす（未確認）
+
+Projects のスレッドを Remote Control で自分のコンピューターの Claude Code につなげて動かせば、そのコンピューターに入れたプラグイン（[install-local.md](install-local.md) の手順で入れたもの）が使える可能性があります。コンテナではなく手元の Claude Code が動くためです。ただし、Projects のスレッドから Remote Control でつないだときに、手元のプラグインのスキル・フックが読み込まれるかは確かめていません。
 
 ## 困ったとき
 

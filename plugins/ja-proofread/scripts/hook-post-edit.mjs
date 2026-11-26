@@ -5,7 +5,7 @@
 // 既存の文書にもともとある指摘のために、関係ない編集のたびに止め続けないため。
 import { existsSync, statSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve, join } from "node:path";
-import { ROOT, loadProjectConfig, matchesAny, toRel, proofreadFiles, summarize, depsReady, dataDir, fileKey } from "./lib.mjs";
+import { ROOT, loadProjectConfig, matchesAny, toRel, proofreadFiles, summarize, dataDir, fileKey } from "./lib.mjs";
 
 export const MAX_BYTES = 200 * 1024;
 const ORDER = { must: 0, should: 1, info: 2 };
@@ -41,19 +41,18 @@ function main(input) {
     context(`ja-proofread: ${rel} は ${Math.round(size / 1024)}KB あり、書いた直後の校正の上限（${MAX_BYTES / 1024}KB）を超えるため飛ばしました。校正するときは proofread スキルを使ってください。`);
     return;
   }
-  const prefix = depsReady() ? "" : "ja-proofread: textlint の依存がまだ入っていないため、構成チェックだけ実行しました。\n";
   const report = proofreadFiles([abs], { cfg });
   const s = summarize(report, { max: 25 });
   const findings = report.files[0]?.findings || [];
 
-  // 前回の結果と比べて、新しく出た指摘だけを数える
-  const fresh = newFindings(abs, findings);
+  // 前回の結果と比べて、新しく出た指摘だけを数える。textlint が動かなかったときは、textlint の分の前回の結果を引き継ぐ
+  const fresh = newFindings(abs, findings, { lintFailed: !!report.lintError });
   const blockOn = cfg.hook.blockOn || "must";
   const blocking = blockOn === "never" ? [] : fresh.filter((x) => ORDER[x.level] <= (ORDER[blockOn] ?? 0));
 
   if (s.total === 0 && !report.lintError && !(report.warnings || []).length) return;
-  let text = prefix + s.text;
-  if (report.lintError) text = "ja-proofread: textlint が動かなかったため、textlint の指摘は確かめられていません。\n" + text;
+  // textlint が動かなかったこと（依存がない場合を含む）は、summarize の「※」の行で1回だけ伝える
+  let text = s.text;
   if (blocking.length) text += `\n\n今回の編集で新しく出た指摘のうち、直してほしいもの：${blocking.length}件（${blocking.slice(0, 5).map((x) => `${x.line ? x.line + "行 " : ""}${x.ruleId}`).join("、")}${blocking.length > 5 ? "ほか" : ""}）`;
   text += FOOTER;
   const payload = blocking.length
@@ -65,13 +64,14 @@ function main(input) {
 // 指摘の見分け方。行番号や回数は編集でずれるので、数字は伏せて比べる
 const sig = (x) => `${x.ruleId}|${String(x.message).replace(/[0-9０-９]+/g, "#")}`;
 
-function newFindings(abs, findings) {
+function newFindings(abs, findings, { lintFailed = false } = {}) {
   const path = join(dataDir(), "hook-last.json");
   let state = {};
   try { state = JSON.parse(readFileSync(path, "utf8")); } catch { state = {}; }
   const key = fileKey(abs);
+  const last = state[key] || {};
   const prev = new Map();
-  for (const s of state[key]?.sigs || []) prev.set(s, (prev.get(s) || 0) + 1);
+  for (const s of last.sigs || []) prev.set(s, (prev.get(s) || 0) + 1);
   const fresh = [];
   for (const x of findings) {
     const s = sig(x);
@@ -79,7 +79,13 @@ function newFindings(abs, findings) {
     if (n > 0) prev.set(s, n - 1);
     else fresh.push(x);
   }
-  state[key] = { at: Date.now(), sigs: findings.map(sig) };
+  // textlint 由来の指摘は lint に分けて残す。textlint が動かなかった回は、前回の lint をそのまま引き継ぐ。
+  // 上書きすると、次に textlint が動いたとき、もとからある指摘がすべて「新しい指摘」になって止めてしまうため
+  const lint = lintFailed
+    ? (last.lint || (last.sigs || []).filter((x) => !findings.some((f) => sig(f) === x)))
+    : findings.filter((x) => x.source === "textlint").map(sig);
+  const own = findings.filter((x) => x.source !== "textlint").map(sig);
+  state[key] = { at: Date.now(), sigs: [...own, ...lint], lint };
   // 古いものから捨て、500ファイル分までにする
   const keys = Object.keys(state).sort((a, b) => (state[b].at || 0) - (state[a].at || 0));
   for (const k of keys.slice(500)) delete state[k];

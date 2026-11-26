@@ -1,11 +1,17 @@
 // 文書全体を見て数える構成チェック。textlint の1か所ずつの検出では拾えない型を扱う
 // 依存なし（Node 標準のみ）
 
+// コードブロックとインラインコードを空白に置き換え、行番号と文字の位置は保つ（HTMLコメントは残す）
+export function maskCode(text) {
+  let t = text.replace(/^(```|~~~)[^\n]*\n[\s\S]*?^\1[^\n]*$/gm, (m) => m.replace(/[^\n]/g, " "));
+  t = t.replace(/`[^`\n]*`/g, (m) => " ".repeat(m.length));
+  return t;
+}
+
 // コードブロック・インラインコード・URL・HTMLコメントを空白に置き換え、行番号は保つ
 export function maskNonProse(text) {
   let t = text.replace(/<!--[\s\S]*?-->/g, (m) => m.replace(/[^\n]/g, " "));
-  t = t.replace(/^(```|~~~)[^\n]*\n[\s\S]*?^\1[^\n]*$/gm, (m) => m.replace(/[^\n]/g, " "));
-  t = t.replace(/`[^`\n]*`/g, (m) => " ".repeat(m.length));
+  t = maskCode(t);
   t = t.replace(/https?:\/\/\S+/g, (m) => " ".repeat(m.length));
   return t;
 }
@@ -28,12 +34,13 @@ function lineOf(text, index) {
 }
 
 // <!-- textlint-disable --> から <!-- textlint-enable --> までの範囲（行番号）。
-// ルール名つき（<!-- textlint-disable P001,P008 -->）なら、そのルールだけを外す。enable がなければ文末まで
+// ルール名つき（<!-- textlint-disable P001,P008 -->）なら、そのルールだけを外す。enable がなければ文末まで。
+// コードブロックやインラインコードの中に書いた textlint-disable は、説明の文字なので数えない
 const DISABLE_RE = /<!--\s*textlint-(disable|enable)\b([^>]*?)-->/g;
 export function disabledRanges(text) {
   const ranges = [];
   const open = [];
-  for (const m of text.matchAll(DISABLE_RE)) {
+  for (const m of maskCode(text).matchAll(DISABLE_RE)) {
     const rules = m[2].split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
     const line = lineOf(text, m.index);
     if (m[1] === "disable") open.push({ from: line, start: m.index, rules });
@@ -161,12 +168,12 @@ const DETECTORS = {
       out.push({ line: lineOf(text, hits[0].index), message: `「3つの〜」の形が ${hits.length} 回あります（${[...new Set(hits.map((h) => h[0]))].join("、")}）` });
     }
     if (lists.length >= 3 && ratio >= (th.listRatio ?? 0.6)) {
-      out.push({ line: 1, message: `箇条書き ${lists.length} 個のうち ${threes} 個がちょうど3項目です` });
+      out.push({ line: 1, whole: true, message: `箇条書き ${lists.length} 個のうち ${threes} 個がちょうど3項目です` });
     }
     return out;
   },
   "closing-lines"(text, p) {
-    const re = new RegExp(p.detect.pattern);
+    const re = new RegExp(p.detect.pattern, (p.detect.flags || "").replace(/g/g, ""));
     const secs = sections(text);
     const out = [];
     const targets = secs.length ? secs.map((s) => ({ line: s.line, body: s.body, start: s.line })) : [{ line: 1, body: text.split("\n"), start: 0 }];
@@ -188,7 +195,7 @@ const DETECTORS = {
     const sd = Math.sqrt(s.reduce((a, b) => a + (b - mean) ** 2, 0) / s.length);
     const cv = sd / mean;
     if (cv <= (th.maxCv ?? 0.3)) {
-      return [{ line: 1, message: `文の長さのばらつきが小さめです（${s.length}文、平均${mean.toFixed(0)}字、変動係数${cv.toFixed(2)}）` }];
+      return [{ line: 1, whole: true, message: `文の長さのばらつきが小さめです（${s.length}文、平均${mean.toFixed(0)}字、変動係数${cv.toFixed(2)}）` }];
     }
     return [];
   },
@@ -232,7 +239,8 @@ export function runStructureChecks(text, ledger, profile = "doc") {
       }
     } else if (t === "structure" && DETECTORS[p.detect.detector]) {
       for (const h of DETECTORS[p.detect.detector](masked, p)) {
-        out.push({ source: "structure", ruleId: p.id, level: p.level, line: h.line, message: `[${p.id}] ${p.name}：${h.message}。${p.guidance}` });
+        // whole は文書全体についての指摘。行番号は目安なので、textlint-disable の範囲で消さない
+        out.push({ source: "structure", ruleId: p.id, level: p.level, line: h.line, ...(h.whole ? { whole: true } : {}), message: `[${p.id}] ${p.name}：${h.message}。${p.guidance}` });
       }
     }
   }

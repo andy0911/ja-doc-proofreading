@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { tmpdir, homedir } from "node:os";
 import { runStructureChecks, disabledRanges } from "./structure-check.mjs";
+import { checkPrhText, CHECKER_ID } from "./regex-safety.mjs";
 
 // プラグインとして入れても、プロジェクトに同梱しても動くよう、スクリプトの位置から根を決める
 export const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -67,23 +68,29 @@ export function checkProfile(p, where = "profile") {
 
 export const DEFAULT_EXCLUDE = ["**/node_modules/**", "**/.git/**", "**/CHANGELOG.md", ".claude/**", "**/CLAUDE.md"];
 
-// プロジェクトの .ja-proofread.json（無ければ既定値）。hook は、このファイルがあるときだけ動く
+// プロジェクトの .ja-proofread.json（無ければ既定値）。hook は、このファイルがあるときだけ動く。
+// ファイルがあるのに JSON として読めないときは、黙って既定値にせずエラーにする
 export function loadProjectConfig(dir = projectDir()) {
   const p = join(dir, ".ja-proofread.json");
-  const user = readJSON(p, null);
+  let user = null;
+  if (existsSync(p)) {
+    try { user = JSON.parse(readFileSync(p, "utf8")); }
+    catch (e) { throw new Error(`${p} を JSON として読めません（${e.message}）。直すまで校正の設定は使えません`); }
+    if (!user || typeof user !== "object" || Array.isArray(user)) throw new Error(`${p} の中身がオブジェクト（{…}）ではありません`);
+  }
   const cfg = {
     exists: user !== null,
     path: p,
     profile: "doc",
     include: ["**/*.md", "**/*.txt"],
-    exclude: DEFAULT_EXCLUDE,
     profiles: {},
     disable: [],
     prh: [],
     baseline: null,
-    hook: { enabled: true, blockOn: "must" },
     ...(user || {}),
   };
+  // exclude は既定の除外（node_modules・.claude/**・CLAUDE.md など）に足す。書いても既定は消えない
+  cfg.exclude = [...new Set([...DEFAULT_EXCLUDE, ...(Array.isArray(user?.exclude) ? user.exclude : [])])];
   cfg.hook = { enabled: true, blockOn: "must", ...((user && user.hook) || {}) };
   checkProfile(cfg.profile, `${p} の profile`);
   for (const [g, v] of Object.entries(cfg.profiles || {})) checkProfile(v, `${p} の profiles["${g}"]`);
@@ -151,8 +158,11 @@ export function buildTextlintConfig(profile, cfg) {
   const extra = [];
   for (const p of cfg.prh || []) {
     const abs = resolve(dirname(cfg.path), p);
-    if (existsSync(abs)) extra.push(abs);
-    else warnings.push(`prh の辞書 ${p} が見つからないため外しました`);
+    if (!existsSync(abs)) { warnings.push(`prh の辞書 ${p} が見つからないため外しました`); continue; }
+    // プロジェクトの辞書の /…/ も、同梱の辞書と同じ検査を通す。通らなければ辞書ごと外す
+    const problems = prhProblems(abs);
+    if (problems.length) { warnings.push(`prh の辞書 ${p} に使えない正規表現があるため外しました：${problems.slice(0, 3).join("／")}${problems.length > 3 ? ` ほか${problems.length - 3}件` : ""}`); continue; }
+    extra.push(abs);
   }
   conf.rules = conf.rules || {};
   conf.rules.prh = { rulePaths: [join(ROOT, "data", "prh.yml"), ...extra] };
@@ -170,6 +180,24 @@ export function buildTextlintConfig(profile, cfg) {
     }
   }
   return { conf, warnings };
+}
+
+// prh の辞書が検査を通ったことは、中身と検査のしかたが同じなら使い回す（フックのたびに測り直さない）。
+// 通らなかった結果は残さない（時間の計測がたまたま遅かっただけのこともあるため、次の回に測り直す）
+function prhProblems(abs) {
+  let text;
+  try { text = readFileSync(abs, "utf8"); } catch (e) { return [`読めませんでした（${e.message}）`]; }
+  const key = createHash("sha256").update(CHECKER_ID).update(text).digest("hex").slice(0, 24);
+  const cachePath = join(dataDir(), "prh-checked.json");
+  const cache = readJSON(cachePath, {}) || {};
+  if (cache[key] === true) return [];
+  const problems = checkPrhText(text, abs.split(/[\\/]/).pop());
+  if (problems.length) return problems;
+  cache[key] = true;
+  const keys = Object.keys(cache);
+  for (const k of keys.slice(0, Math.max(0, keys.length - 100))) delete cache[k];
+  try { writeFileSync(cachePath, JSON.stringify(cache)); } catch { /* 記録できなくても続ける */ }
+  return [];
 }
 
 export function runTextlint(files, profile, cfg) {
@@ -252,7 +280,8 @@ export function proofreadFiles(files, { cfg = loadProjectConfig(), profile } = {
       const structure = runStructureChecks(text, ledger, p);
       // textlint-disable の範囲（ルール名つきならそのルールだけ）と、設定の disable を、すべての指摘に当てる
       const ranges = disabledRanges(text);
-      const inRange = (x) => x.line && ranges.some((r) => x.line >= r.from && x.line <= r.to && (!r.rules.length || isDisabled(x.ruleId, r.rules)));
+      // 文書全体についての指摘（whole）は、行番号が目安なので範囲では消さない
+      const inRange = (x) => x.line && !x.whole && ranges.some((r) => x.line >= r.from && x.line <= r.to && (!r.rules.length || isDisabled(x.ruleId, r.rules)));
       const findings = [...lint, ...structure].filter((x) => !isDisabled(x.ruleId, disable) && !inRange(x));
       out.push({ file: abs, profile: p, findings });
     }

@@ -10,9 +10,9 @@ description: 日本語の文書・スライド・報告書を校正するとき�
 | 段階 | 誰が | 何を見るか |
 |---|---|---|
 | 1. 機械チェック | スクリプト | 表記ゆれ、台帳の語句と構成の型、文の長さ |
-| 2. 独立レビュー | `structure-reviewer` サブエージェント | 構成の型、用語・数字の整合。指摘だけで書き換えない |
+| 2. 独立レビュー | `ja-proofread:structure-reviewer` サブエージェント | 構成の型、用語・数字の整合。指摘だけで書き換えない |
 | 3. 修正 | あなた | 1と2の指摘を、意味を変えずに直す |
-| 4. 読者役テスト | `fresh-eyes-reader` サブエージェント2〜3体 | 理解できるか、信頼できるか、引っかかる所（自由回答） |
+| 4. 読者役テスト | `ja-proofread:fresh-eyes-reader` サブエージェント2〜3体 | 理解できるか、信頼できるか、引っかかる所（自由回答） |
 
 最後に、人が確かめる項目の一覧（`${CLAUDE_PLUGIN_ROOT}/templates/review-checklist.md`）を本人に渡します。事実と数字の確認は人の仕事で、このスキルでは完了扱いにしません。
 
@@ -31,9 +31,11 @@ JA_PROOFREAD_DATA="${CLAUDE_PLUGIN_DATA}" node "${CLAUDE_PLUGIN_ROOT}/scripts/en
 ## 1. 機械チェック
 
 ```bash
-JA_PROOFREAD_DATA="${CLAUDE_PLUGIN_DATA}" node "${CLAUDE_PLUGIN_ROOT}/scripts/proofread.mjs" --profile slide 対象.md        # 一覧で見る
-JA_PROOFREAD_DATA="${CLAUDE_PLUGIN_DATA}" node "${CLAUDE_PLUGIN_ROOT}/scripts/proofread.mjs" --profile slide --json 対象.md # 件数を数えるとき
+JA_PROOFREAD_DATA="${CLAUDE_PLUGIN_DATA}" node "${CLAUDE_PLUGIN_ROOT}/scripts/proofread.mjs" 対象.md        # 一覧で見る
+JA_PROOFREAD_DATA="${CLAUDE_PLUGIN_DATA}" node "${CLAUDE_PLUGIN_ROOT}/scripts/proofread.mjs" --json 対象.md # 件数を数えるとき
 ```
+
+- 0で決めた種類は `--profile doc` か `--profile slide` で渡します（`対象.md` の前に置く）。`.ja-proofread.json` の `profile` や `profiles` に任せるときは付けません。
 
 - 「必ず」「直したい」「参考」の件数を控えます。報告で修正前と修正後を比べるためです。
 - 「textlint が動かなかった」と出たら、表記と文法の指摘は確かめられていません。0件と報告せず、そのことを報告に書きます。
@@ -42,7 +44,7 @@ JA_PROOFREAD_DATA="${CLAUDE_PLUGIN_DATA}" node "${CLAUDE_PLUGIN_ROOT}/scripts/pr
 
 ## 2. 独立レビュー
 
-`structure-reviewer` サブエージェントを1体起動します。渡すのは次の3つだけにします。書いた経緯や意図は渡しません。先入観なく読ませるためです。
+`ja-proofread:structure-reviewer` サブエージェントを1体起動します（呼ぶときは、この接頭辞つきの名前で指定します）。渡すのは次の3つだけにします。書いた経緯や意図は渡しません。先入観なく読ませるためです。
 
 - 対象ファイルのパス
 - 台帳のパス（`${CLAUDE_PLUGIN_ROOT}/data/ledger.json`）
@@ -58,7 +60,7 @@ JA_PROOFREAD_DATA="${CLAUDE_PLUGIN_DATA}" node "${CLAUDE_PLUGIN_ROOT}/scripts/pr
 
 ## 4. 読者役テスト（フレッシュアイズ）
 
-`${CLAUDE_PLUGIN_ROOT}/templates/reader-test.md` に従って、読者役を2〜3体、別々のサブエージェントとして起動します。
+`${CLAUDE_PLUGIN_ROOT}/templates/reader-test.md` に従って、読者役を2〜3体、別々の `ja-proofread:fresh-eyes-reader` サブエージェントとして起動します。
 
 - 1体は必ず「AIの文章に抵抗がある読者」にします。
 - 読者役には、対象の本文と人物像だけを渡します。書き手が誰か、AIを使ったか、校正したかは伝えません。

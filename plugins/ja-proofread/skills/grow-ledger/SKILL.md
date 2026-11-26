@@ -100,13 +100,15 @@ node "${CLAUDE_PLUGIN_ROOT}/scripts/stylometry.mjs" compare --baseline 基準.js
 | 対象の型ID | `id` |
 | 分類、重さ、直し方、例文 | `category`、`level`、`guidance`、`example.before` |
 
-4. 反映します。新しい型があれば2桁目、変更・廃止・表記だけなら3桁目のバージョンが上がり、`CHANGELOG.md` に1行ずつ足されます。全件を確かめてから書くので、1件でも問題があれば、どのファイルも変わりません。正規表現は、入れ子の繰り返し、長い文字列で遅いもの、長さ0で一致するものを拒否します。
+4. 反映します。新しい型があれば2桁目、変更・廃止・表記だけなら3桁目のバージョンが上がり、`CHANGELOG.md` に1行ずつ足されます。全件を確かめてから書くので、1件でも問題があれば、どのファイルも変わりません。正規表現は、入れ子の繰り返し、繰り返すグループの中の `|`（`(?:漢|漢字?)+` など）、長い文字列（かな・漢字・全角の英数字や記号）で遅いもの、長さ0で一致し得るもの（先読み・後読みだけの形を含む）を拒否します。
+
+   反映は、リポジトリの作業コピーの根で、作業コピーのスクリプトを使って動かします。インストール済みのプラグインや同梱した版のスクリプトから動かすと、上の確認で必ず止まります。
 
 ```bash
-JA_PROOFREAD_DATA="${CLAUDE_PLUGIN_DATA}" node "${CLAUDE_PLUGIN_ROOT}/scripts/ledger.mjs" apply approved.json
+node plugins/ja-proofread/scripts/ledger.mjs apply approved.json
 ```
 
-   作業コピーの中では、作業コピーのスクリプトを使います（`node plugins/ja-proofread/scripts/ledger.mjs apply approved.json`）。インストール済みのプラグインのスクリプトから動かすと、上の確認で止まります。続けて確かめます。
+   続けて確かめます。
 
 ```bash
 node plugins/ja-proofread/scripts/ledger.mjs validate
@@ -138,4 +140,10 @@ claude plugin marketplace update ja-doc-proofreading
 claude plugin update ja-proofread@ja-doc-proofreading
 ```
 
-- プロジェクトに同梱している場合（クラウドセッション向け）は、`node "${CLAUDE_PLUGIN_ROOT}/scripts/install-into-project.mjs" <プロジェクト>` をもう一度実行して、同梱した版を入れ替えます。
+- プロジェクトに同梱している場合（クラウドセッション向け）は、マーケットプレイスの作業コピーを最新にしてから（`git pull`）、作業コピーのスクリプトで同梱し直し、同梱した版を入れ替えます。同梱した版のスクリプト（`.claude/ja-proofread/scripts/`）からは実行できません。
+
+```bash
+node <マーケットプレイスの作業コピー>/plugins/ja-proofread/scripts/install-into-project.mjs <プロジェクト>
+```
+
+<!-- plugin-only -->プラグインとして入れている環境なら、`claude plugin marketplace update ja-doc-proofreading` のあと `node "${CLAUDE_PLUGIN_ROOT}/scripts/install-into-project.mjs" <プロジェクト>` でも同じです。<!-- /plugin-only -->

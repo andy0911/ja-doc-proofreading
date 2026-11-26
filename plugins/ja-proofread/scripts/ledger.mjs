@@ -11,13 +11,20 @@ import { readFileSync, writeFileSync, existsSync, appendFileSync, realpathSync, 
 import { join, resolve, sep } from "node:path";
 import { homedir } from "node:os";
 import { spawnSync } from "node:child_process";
-import { ROOT, dataDir, loadLedger, readJSON } from "./lib.mjs";
+import { ROOT, dataDir, loadLedger, readJSON, PROFILES } from "./lib.mjs";
 import { checkRegex } from "./regex-safety.mjs";
 
 const LEDGER = join(ROOT, "data", "ledger.json");
 const PRH = join(ROOT, "data", "prh.yml");
 const PLUGIN_JSON = join(ROOT, ".claude-plugin", "plugin.json");
 const REPO = resolve(ROOT, "..", "..");
+const MARKETPLACE_JSON = join(REPO, ".claude-plugin", "marketplace.json");
+
+// マーケットプレイスの定義に書いたこのプラグインの version（無ければ undefined）
+function marketplaceEntry() {
+  const m = readJSON(MARKETPLACE_JSON, null);
+  return m && Array.isArray(m.plugins) ? { m, e: m.plugins.find((p) => p.name === "ja-proofread") } : { m, e: undefined };
+}
 const CATEGORIES = ["語彙", "言い回し", "書式", "構成", "表記"];
 const LEVELS = ["must", "should", "info"];
 const TYPES = ["regex", "regex-count", "structure", "review"];
@@ -29,10 +36,12 @@ function arg(name) {
   return i >= 0 ? process.argv[i + 1] : undefined;
 }
 
-export function validateLedger(ledger) {
+// pluginVersion を渡すと、台帳の version がプラグインの版と同じかも確かめる（apply は両方を同じ版にする）
+export function validateLedger(ledger, { pluginVersion } = {}) {
   const errors = [];
   const ids = new Set();
   if (!/^\d+\.\d+\.\d+$/.test(ledger.version || "")) errors.push("version が x.y.z の形ではありません");
+  else if (pluginVersion && ledger.version !== pluginVersion) errors.push(`台帳の version（${ledger.version}）が plugin.json の version（${pluginVersion}）と違います。そろえてください`);
   for (const p of ledger.patterns || []) {
     const where = `${p.id || "(IDなし)"} ${p.name || ""}`;
     if (!/^[PR]\d{3,}$/.test(p.id || "")) errors.push(`${where}: id は P001 / R001 の形にしてください`);
@@ -43,6 +52,18 @@ export function validateLedger(ledger) {
     if (!LEVELS.includes(p.level)) errors.push(`${where}: level は ${LEVELS.join("/")} のどれかです`);
     if (!p.guidance) errors.push(`${where}: guidance（直し方）がありません`);
     if (!["active", "retired"].includes(p.status)) errors.push(`${where}: status は active / retired です`);
+    if (p.profiles !== undefined && (!Array.isArray(p.profiles) || !p.profiles.length || p.profiles.some((x) => !PROFILES.includes(x)))) {
+      errors.push(`${where}: profiles は ${PROFILES.join("/")} の配列にしてください（今は ${JSON.stringify(p.profiles)}）`);
+    }
+    const th = p.detect?.threshold;
+    if (th !== undefined) {
+      if (!th || typeof th !== "object" || Array.isArray(th)) errors.push(`${where}: detect.threshold はオブジェクトにしてください`);
+      else {
+        if (th.minCount !== undefined && !(Number.isInteger(th.minCount) && th.minCount >= 1)) errors.push(`${where}: threshold.minCount は1以上の整数にしてください（今は ${JSON.stringify(th.minCount)}）`);
+        if (th.minRun !== undefined && !(Number.isInteger(th.minRun) && th.minRun >= 2)) errors.push(`${where}: threshold.minRun は2以上の整数にしてください（今は ${JSON.stringify(th.minRun)}）`);
+        for (const k of ["per1000", "listRatio", "maxCv", "minSentences"]) if (th[k] !== undefined && !(typeof th[k] === "number" && th[k] >= 0)) errors.push(`${where}: threshold.${k} は0以上の数にしてください`);
+      }
+    }
     const t = p.detect?.type;
     if (!TYPES.includes(t)) { errors.push(`${where}: detect.type は ${TYPES.join("/")} のどれかです`); continue; }
     if (t === "regex" || t === "regex-count" || p.detect.pattern) {
@@ -134,7 +155,10 @@ if (cmd === "list") {
   console.log(`台帳 v${l.version}（${l.patterns.filter((p) => p.status === "active").length}件が有効）`);
   for (const p of l.patterns) console.log(`${p.id}\t${p.status === "active" ? "" : "[廃止] "}${p.name}\t${p.category}\t${p.level}\t${p.detect.type}`);
 } else if (cmd === "validate") {
-  const errors = [...validateLedger(loadLedger()), ...validatePrh(parsePrh(readFileSync(PRH, "utf8")))];
+  const pluginVersion = readJSON(PLUGIN_JSON)?.version;
+  const errors = [...validateLedger(loadLedger(), { pluginVersion }), ...validatePrh(parsePrh(readFileSync(PRH, "utf8")))];
+  const mv = marketplaceEntry().e?.version;
+  if (mv !== undefined && mv !== pluginVersion) errors.push(`marketplace.json の version（${mv}）が plugin.json の version（${pluginVersion}）と違います。そろえてください`);
   if (errors.length) { console.error(errors.map((e) => "- " + e).join("\n")); process.exit(1); }
   console.log("台帳と辞書に問題はありません");
 } else if (cmd === "fp") {
@@ -233,7 +257,15 @@ if (cmd === "list") {
   const cl = join(REPO, "CHANGELOG.md");
   const head = existsSync(cl) ? readFileSync(cl, "utf8") : "# 変更履歴\n";
   const [title, ...rest] = head.split("\n");
+  // marketplace.json にこのプラグインの version を書いているなら、同じ版にそろえる
+  const { m: market, e: entry } = marketplaceEntry();
+  const marketOut = [];
+  if (entry && entry.version !== undefined) {
+    entry.version = newVersion;
+    marketOut.push([MARKETPLACE_JSON, JSON.stringify(market, null, 2) + "\n"]);
+  }
   const outputs = [
+    ...marketOut,
     [LEDGER, JSON.stringify(ledger, null, 2) + "\n"],
     [PRH, prhText],
     [PLUGIN_JSON, JSON.stringify(plugin, null, 2) + "\n"],

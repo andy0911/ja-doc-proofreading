@@ -9,7 +9,7 @@ AI で書いた日本語の文書やスライドを校正する Claude Code の�
 | 段階 | 中身 |
 |---|---|
 | 書く前 | `write` スキルが、台帳の型を避けて書くよう Claude に指示する |
-| 書いた直後 | フックが textlint と台帳でファイルを調べ、重い指摘は Claude に直させる |
+| 書いた直後 | プロジェクトの直下に `.ja-proofread.json` があるときだけ、フックが textlint と台帳でファイルを調べ、新しく出た重い指摘は Claude に直させる |
 | 仕上げ | `proofread` スキルが、機械チェック、独立レビュー、修正、読者役テストを順に行い、件数つきで報告する |
 | 育てる | `grow-ledger` スキルが、新しい型の候補を Notion に登録し、承認されたものだけを台帳に入れて版を上げる |
 
@@ -25,7 +25,7 @@ claude plugin install ja-proofread@ja-doc-proofreading --scope user
 - 手元の Claude Code：[docs/install-local.md](docs/install-local.md)
 - クラウドセッション：[docs/install-cloud.md](docs/install-cloud.md)
 
-新しい版が出たら、次を実行して Claude Code を起動し直します。このマーケットプレイスは自動更新が既定でオフです。
+新しい版が出たら、次を実行して Claude Code を起動し直します（起動中のセッションなら `/reload-plugins` でも反映できます）。このマーケットプレイスは自動更新が既定でオフです。
 
 ```bash
 claude plugin marketplace update ja-doc-proofreading

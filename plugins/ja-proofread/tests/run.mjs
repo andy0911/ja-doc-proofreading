@@ -265,5 +265,126 @@ r = run([S("stylometry.mjs"), "compare", "--baseline", base, "--json", join(ROOT
 const cmp = json(r.stdout);
 ok("比較で「ではなく」の頻度差が出る", cmp.rates?.contrast?.current > cmp.rates?.contrast?.base, r.stdout.slice(0, 200));
 
+// 17. 0.1.2 で直した不具合の再現
+// A. インラインコードやコードブロックの中の textlint-disable は範囲にしない
+const codeDis = write(WORK, "code-disable.md", "# 書き方\n\n作例を外すときは `<!-- textlint-disable -->` と書きます。\n\n網羅的に調べました。さまざまな側面があります。\n\n価格ではなく体験です。品質ではなく速さです。量ではなく質です。形ではなく中身です。色ではなく形です。\n");
+const cdRep = proofread(codeDis);
+const cdIds = idsOf(cdRep);
+ok("インラインコードの中の textlint-disable では指摘が消えない（P008 と P001 が出る）", cdIds.has("P008") && cdIds.has("P001") && (cdRep.files?.[0]?.findings || []).length >= 3, JSON.stringify((cdRep.files?.[0]?.findings || []).map((x) => x.ruleId)));
+const fenceDis = write(WORK, "fence-disable.md", "# 書き方\n\n```markdown\n<!-- textlint-disable -->\n```\n\n網羅的に調べました。\n\n価格ではなく体験です。品質ではなく速さです。量ではなく質です。形ではなく中身です。色ではなく形です。\n");
+const fdIds = idsOf(proofread(fenceDis));
+ok("コードブロックの中の textlint-disable でも指摘が消えない", fdIds.has("P008") && fdIds.has("P001"), [...fdIds].join(","));
+const { disabledRanges } = await import(join(ROOT, "scripts/structure-check.mjs"));
+ok("本物の textlint-disable コメントは今までどおり範囲になる", disabledRanges("a\n<!-- textlint-disable -->\nb\n<!-- textlint-enable -->\n").length === 1 && disabledRanges("`<!-- textlint-disable -->`\n").length === 0);
+// 文書全体の指摘（行1）は、1行目から始まる disable の範囲で消さない
+const wholeDoc = write(WORK, "whole.md", "<!-- textlint-disable -->\n<!-- textlint-enable -->\n\n# 一覧\n\n- 赤\n- 青\n- 黄\n\n- 犬\n- 猫\n- 鳥\n\n- 春\n- 夏\n- 秋\n");
+const wf = proofread(wholeDoc).files?.[0]?.findings || [];
+ok("文書全体の指摘（3項目の箇条書きの割合）は1行目からの disable の範囲で消えない", wf.some((x) => x.ruleId === "P004" && x.line === 1), JSON.stringify(wf.map((x) => `${x.ruleId}:${x.line}`)));
+
+// B. 正規表現の検査：漢字・全角の見本、繰り返す選択、長さ0
+unchanged("(?:[一-龯]|[一-龯])+$ を拒否する", [{ action: "add", name: "x", category: "語彙", detect: { type: "regex", pattern: "(?:[一-龯]|[一-龯])+$" }, guidance: "x" }]);
+unchanged("(?:漢|漢字?)+$ を拒否する", [{ action: "add", name: "x", category: "語彙", detect: { type: "regex", pattern: "(?:漢|漢字?)+$" }, guidance: "x" }]);
+unchanged("(?:\\p{Script=Han}|\\p{Script=Han})+$（u）を拒否する", [{ action: "add", name: "x", category: "語彙", detect: { type: "regex", pattern: "(?:\\p{Script=Han}|\\p{Script=Han})+$", flags: "u" }, guidance: "x" }]);
+unchanged("後読みだけで長さ0になる (?<=漢) を拒否する", [{ action: "add", name: "x", category: "語彙", detect: { type: "regex", pattern: "(?<=漢)" }, guidance: "x" }]);
+r = run([S("regex-safety.mjs"), "--probe", "(?:漢|漢字?)+$", ""], { timeout: 4000 });
+ok("時間を測る見本に漢字が入っている（(?:漢|漢字?)+$ が見本で止まらない）", !!(r.error || r.signal) || json(r.stdout).ms > 200, JSON.stringify({ s: r.signal, out: r.stdout }));
+const { checkRegex } = await import(join(ROOT, "scripts/regex-safety.mjs"));
+ok("同梱の台帳の正規表現は新しい検査も通る", ledger.patterns.filter((p) => p.detect?.pattern).every((p) => checkRegex(p.detect.pattern, p.detect.flags).length === 0), ledger.patterns.map((p) => p.detect?.pattern && `${p.id}:${checkRegex(p.detect.pattern, p.detect.flags)}`).filter(Boolean).join(" "));
+const prhBad = tmp("jp-prhbad-");
+write(prhBad, "team.yml", "version: 1\nrules:\n  - expected: 漢字\n    patterns:\n      - /(?:漢|漢字?)+$/\n");
+writeFileSync(join(prhBad, ".ja-proofread.json"), JSON.stringify({ prh: ["team.yml"] }));
+const prhBadRep = proofread(join(ROOT, "tests/fixtures/ai-like.md"), [], { cwd: prhBad });
+ok("プロジェクトの prh 辞書に危ない正規表現があれば、警告して辞書を外す", prhBadRep.ok && (prhBadRep.warnings || []).some((w) => /team\.yml/.test(w) && /使えない正規表現/.test(w)) && idsOf(prhBadRep).has("prh"), JSON.stringify(prhBadRep.warnings) + prhBadRep.lintError);
+
+const prhGood = tmp("jp-prhgood-");
+write(prhGood, "team.yml", "version: 1\nrules:\n  - expected: 問い合わせ\n    patterns:\n      - \"/問合わ?せ/\"\n");
+writeFileSync(join(prhGood, ".ja-proofread.json"), JSON.stringify({ prh: ["team.yml"] }));
+const goodDoc = write(prhGood, "g.md", "# 窓口\n\n問合せは窓口で受けます。\n");
+const goodRep1 = proofread(goodDoc, [], { cwd: prhGood });
+const goodRep2 = proofread(goodDoc, [], { cwd: prhGood });
+ok("安全な正規表現だけのプロジェクトの prh 辞書は使われる（2回目は記録を使う）", [goodRep1, goodRep2].every((x) => !(x.warnings || []).length && (x.files?.[0]?.findings || []).some((f) => f.ruleId === "prh" && /問い合わせ/.test(f.message))), JSON.stringify([goodRep1.warnings, goodRep1.files?.[0]?.findings?.map((f) => f.message)]));
+
+// C. textlint が一度落ちても、次に動いたとき、もとからある指摘で止めない
+const lfProj = tmp("jp-lintfail-");
+writeFileSync(join(lfProj, ".ja-proofread.json"), JSON.stringify({ profile: "doc" }));
+write(lfProj, "m.md", "# メモ\n\n出来ることを書きます。\n");
+const lfData = tmp("jp-lfdata-");
+if (existsSync(join(OUTER_DATA, "deps"))) symlinkSync(join(OUTER_DATA, "deps"), join(lfData, "deps"));
+const lfFake = tmp("jp-lffake-");
+write(lfFake, "deps/.stamp", readFileSync(join(fake, "deps/.stamp"), "utf8"));
+write(lfFake, "deps/node_modules/textlint/bin/textlint.js", 'process.stderr.write("Error: boom\\n"); process.exit(2);\n');
+const lfHook = (data) => json(run([S("hook-post-edit.mjs")], { input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: join(lfProj, "m.md") }, cwd: lfProj }), env: { CLAUDE_PROJECT_DIR: lfProj, JA_PROOFREAD_DATA: data } }).stdout);
+const lf1 = lfHook(lfData);
+ok("（準備）最初は must の指摘で止める", lf1.decision === "block", JSON.stringify(lf1).slice(0, 200));
+// textlint が落ちる回は、同じ記録の場所で偽の textlint を使う
+cpSync(join(lfData, "hook-last.json"), join(lfFake, "hook-last.json"));
+const lf2 = lfHook(lfFake);
+cpSync(join(lfFake, "hook-last.json"), join(lfData, "hook-last.json"));
+const lf3 = lfHook(lfData);
+ok("textlint が落ちた回のあとに動いても、前からある指摘では止めない", !lf2.decision && !lf3.decision && /prh/.test(lf3.hookSpecificOutput?.additionalContext || ""), JSON.stringify({ lf2: lf2.decision, lf3 }).slice(0, 300));
+
+// D. 壊れた .ja-proofread.json は黙って無視しない
+const brokenCfg = tmp("jp-broken-");
+writeFileSync(join(brokenCfg, ".ja-proofread.json"), '{ "profile": "doc", }');
+write(brokenCfg, "b.md", "# メモ\n\n出来ることを書きます。\n");
+r = run([S("proofread.mjs"), join(brokenCfg, "b.md")], { cwd: brokenCfg });
+ok("壊れた .ja-proofread.json では CLI が終了コード2で止まる", r.status === 2 && /JSON として読めません/.test(r.stderr), r.status + r.stderr);
+const bh = json(run([S("hook-post-edit.mjs")], { input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: join(brokenCfg, "b.md") }, cwd: brokenCfg }), env: { CLAUDE_PROJECT_DIR: brokenCfg } }).stdout);
+ok("壊れた .ja-proofread.json はフックが additionalContext で知らせる", /設定を読めない/.test(bh.hookSpecificOutput?.additionalContext || "") && !bh.decision, JSON.stringify(bh).slice(0, 200));
+
+// E. 2回同梱してから --remove しても、settings.json.bak はフックの入っていない設定
+const bakProj = tmp("jp-bak-");
+mkdirSync(join(bakProj, ".claude"), { recursive: true });
+writeFileSync(join(bakProj, ".claude/settings.json"), JSON.stringify({ permissions: { allow: ["Bash(ls)"] } }));
+run([S("install-into-project.mjs"), bakProj]);
+run([S("install-into-project.mjs"), bakProj]);
+const vsk = readFileSync(join(bakProj, ".claude/skills/ja-proofread-proofread/SKILL.md"), "utf8");
+const vgl = readFileSync(join(bakProj, ".claude/skills/ja-proofread-grow-ledger/SKILL.md"), "utf8");
+r = run([S("install-into-project.mjs"), bakProj, "--remove"]);
+const bak = readFileSync(join(bakProj, ".claude/settings.json.bak"), "utf8");
+ok("2回同梱して --remove しても .bak にフックが入らない", r.status === 0 && !bak.includes(".claude/ja-proofread/scripts/") && json(bak).permissions?.allow?.[0] === "Bash(ls)", bak.slice(0, 200));
+ok("同梱したスキルは、サブエージェントを接頭辞なしで呼び、同梱版から install-into-project を動かす案内がない", !/ja-proofread:(structure-reviewer|fresh-eyes-reader)/.test(vsk) && /`structure-reviewer`/.test(vsk) && !vgl.includes("plugin-only") && !/CLAUDE_SKILL_DIR[^\n]*install-into-project/.test(vgl));
+
+// F. P011 は熟語の一部に当たらない
+const p11 = write(WORK, "p11.md", "# 現場\n\n地下の表示を確かめます。壇上の表彰式に出ます。机上の図面を広げます。川上の点検口を開けます。この上の表示を消します。\n\n結果は下の表にまとめます。\n");
+const p11f = (proofread(p11).files?.[0]?.findings || []).filter((x) => x.ruleId === "P011");
+ok("P011 が「地下の表示」「壇上の表彰式」「机上の図面」「川上の点検口」「上の表示」に当たらず、「下の表に」には当たる", p11f.length === 1 && p11f[0].line === 5, JSON.stringify(p11f.map((x) => `${x.line}:${x.message.slice(0, 40)}`)));
+
+// 参考の指摘
+const exProj = tmp("jp-exclude-");
+writeFileSync(join(exProj, ".ja-proofread.json"), JSON.stringify({ exclude: ["drafts/**"] }));
+write(exProj, "CLAUDE.md", readFileSync(join(ROOT, "tests/fixtures/ai-like.md"), "utf8"));
+write(exProj, "drafts/x.md", readFileSync(join(ROOT, "tests/fixtures/ai-like.md"), "utf8"));
+const exHook = (f) => run([S("hook-post-edit.mjs")], { input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: join(exProj, f) }, cwd: exProj }), env: { CLAUDE_PROJECT_DIR: exProj } }).stdout.trim();
+ok("exclude を書いても既定の除外（CLAUDE.md）は残り、書いた除外も効く", exHook("CLAUDE.md") === "" && exHook("drafts/x.md") === "");
+const noDepsData = tmp("jp-nodeps2-");
+const ndOut = json(run([S("hook-post-edit.mjs")], { input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: join(lfProj, "m.md") }, cwd: lfProj }), env: { CLAUDE_PROJECT_DIR: lfProj, JA_PROOFREAD_DATA: noDepsData } }).stdout);
+const ndText = ndOut.reason || ndOut.hookSpecificOutput?.additionalContext || "";
+ok("依存がないときの注意はフックの結果に1回だけ出る", existsSync(join(ROOT, "node_modules", "textlint")) || (ndText.match(/依存がまだ入っていません|依存がまだ入っていない/g) || []).length === 1, ndText.slice(0, 400));
+const vRepo = tmp("jp-vrepo-");
+const vLedgerJs = makeRepo(vRepo);
+const vLedgerPath = join(vRepo, "plugins/ja-proofread/data/ledger.json");
+const vl = json(readFileSync(vLedgerPath, "utf8"));
+vl.patterns[0].detect.threshold.minCount = 0;
+vl.patterns[1].profiles = ["doc", "poster"];
+vl.version = "9.9.9";
+writeFileSync(vLedgerPath, JSON.stringify(vl));
+r = run([vLedgerJs, "validate"]);
+ok("validate が minCount 0、知らない profiles、plugin.json と違う台帳の版を拒否する", r.status === 1 && /minCount/.test(r.stderr) && /poster/.test(r.stderr) && /9\.9\.9/.test(r.stderr), r.stderr);
+const { runStructureChecks: rsc } = await import(join(ROOT, "scripts/structure-check.mjs"));
+const flagLedger = { patterns: [{ id: "P900", name: "t", status: "active", level: "should", guidance: "g", detect: { type: "structure", detector: "closing-lines", pattern: "KEY。$", flags: "i", threshold: { minCount: 2 } } }] };
+const flagOut = rsc("# 一\n\n本文です。最後は key。\n\n# 二\n\n本文です。これも key。\n", flagLedger, "doc");
+ok("closing-lines が flags を使う", flagOut.length === 2, JSON.stringify(flagOut));
+// 版の確かめ：下げた版は通さない
+const vb = tmp("jp-vbump-");
+const g = (...a) => spawnSync("git", a, { cwd: vb, encoding: "utf8" });
+g("init", "-q"); g("config", "user.email", "t@example.invalid"); g("config", "user.name", "t");
+write(vb, "plugins/ja-proofread/.claude-plugin/plugin.json", JSON.stringify({ version: "0.2.0" }));
+g("add", "-A"); g("commit", "-qm", "base"); g("branch", "base");
+const bumpScript = resolve(ROOT, "..", "..", ".github/scripts/check-version-bump.sh");
+const bumpTo = (v) => { write(vb, "plugins/ja-proofread/.claude-plugin/plugin.json", JSON.stringify({ version: v })); g("commit", "-qam", v); return spawnSync("bash", [bumpScript, "base"], { cwd: vb, encoding: "utf8" }); };
+ok("check-version-bump.sh は版を下げると落ちる", bumpTo("0.1.9").status === 1);
+ok("check-version-bump.sh は版を上げると通る", bumpTo("0.10.0").status === 0);
+
 console.log(failed ? `\n${passed + failed} 項目中 ${failed} 件失敗` : `\n${passed} 項目すべて成功`);
 process.exit(failed ? 1 : 0);
