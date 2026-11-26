@@ -37,9 +37,9 @@ curl -fsSLo /tmp/ja-proofread-setup.mjs https://raw.githubusercontent.com/andy09
 
 claude.ai/customize/plugins でアカウントにマーケットプレイスを足す方法は、持ち主の環境では追加ができなかったので、参考として [docs/install-cloud.md](docs/install-cloud.md) の B1 に回しています。
 
-claude.ai/code の Projects では、プロジェクトのどれかのスレッドで上の1行の最後に `--project-kit /mnt/project-files/ja-proofread-kit` を足して実行し、プロジェクトの会話で「`/mnt/project-files/ja-proofread-kit/PROJECT-INSTRUCTIONS.md` の貼る部分を、一字も変えずにプロジェクト指示に足して」と頼みます。新しいスレッドから、書いた・直した文書を毎回、kit が書き換えられていないかを照らし合わせてから校正するようになります。フックの代わりにプロジェクト指示で頼むので、Claude が飛ばすことがあります。詳しくは [docs/install-projects.md](docs/install-projects.md) です。
+claude.ai/code の Projects では、プロジェクトのどれかのスレッドで、上の1行の最後に `--project-kit /mnt/project-files/ja-proofread-kit` を足して実行します。そのあと、プロジェクトの会話で「`/mnt/project-files/ja-proofread-kit/PROJECT-INSTRUCTIONS.md` の貼る部分を、一字も変えないでプロジェクト指示に足して」と頼みます。新しいスレッドからは、書いた・直した文書を毎回、kit の書き換えを照らし合わせで確かめてから校正します。フックの代わりにプロジェクト指示で頼むので、Claude は飛ばすことがあります。詳しくは [docs/install-projects.md](docs/install-projects.md) です。
 
-claude.ai のチャットのプロジェクト（claude.ai の Projects。プロジェクトの指示・ファイル・スキルを入れて使うもの）では、[dist/claude-ai/ja-proofread-skill.zip](https://raw.githubusercontent.com/andy0911/ja-doc-proofreading/main/dist/claude-ai/ja-proofread-skill.zip) を Customize > Skills > 「+」> Create skill > Upload a skill で上げ、[dist/claude-ai/PROJECT-INSTRUCTIONS.md](dist/claude-ai/PROJECT-INSTRUCTIONS.md) の貼る部分をプロジェクトの指示に足します。コード実行を使える設定にしておく必要があります。フックはないので、プロジェクトの指示で毎回の校正を頼みます。Claude が飛ばすことがあります。詳しくは [docs/install-claude-ai.md](docs/install-claude-ai.md) です。
+claude.ai のチャットのプロジェクト（claude.ai の Projects。プロジェクトの指示・ファイル・スキルを入れて使うもの）では、[dist/claude-ai/ja-proofread-skill.zip](https://raw.githubusercontent.com/andy0911/ja-doc-proofreading/main/dist/claude-ai/ja-proofread-skill.zip) を Customize > Skills > 「+」> Create skill > Upload a skill で上げ、[dist/claude-ai/PROJECT-INSTRUCTIONS.md](dist/claude-ai/PROJECT-INSTRUCTIONS.md) の貼る部分をプロジェクトの指示に足します。コード実行を使える設定にしておきます。フックはないので、プロジェクトの指示で毎回の校正を頼みます。Claude は飛ばすことがあります。詳しくは [docs/install-claude-ai.md](docs/install-claude-ai.md) です。
 
 新しい版が出たら、次を実行して Claude Code を起動し直します（起動中のセッションなら `/reload-plugins` でも反映できます）。このマーケットプレイスは自動更新が既定でオフです。
 

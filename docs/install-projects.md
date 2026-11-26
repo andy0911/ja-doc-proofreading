@@ -31,7 +31,7 @@ curl -fsSLo /tmp/ja-proofread-setup.mjs https://raw.githubusercontent.com/andy09
 
 書けるのは、まだないか空のディレクトリ、または前に kit を書いたディレクトリで、名前に `kit` という語を区切って含むとき（`ja-proofread-kit`・`kit`・`my-kit` など）だけです。`/mnt/project-files` そのもの、`/`、HOME、名前に `kit` という語のないディレクトリ（`toolkit` など）、`"`・`$`・`` ` ``・`\` を含むパスは断ります。
 
-検出と誤検知の記録は、kit の隣の `/mnt/project-files/ja-proofread-data/` に残ります（スレッドをまたいで残る）。kit に `kit.json` があると、スクリプトが kit の隣を記録の置き場にします。textlint の依存は、スレッドの中の `~/.cache/ja-proofread/deps` に入り、スレッドごとに入れ直します（数十秒）。環境変数 `JA_PROOFREAD_DATA` は付けません（付けると、記録も依存もその下に変わります）。
+検出と誤検知の記録は、kit の隣の `/mnt/project-files/ja-proofread-data/` に残ります（スレッドをまたいで残る）。kit に `kit.json` があると、スクリプトが kit の隣を記録の置き場にします。textlint の依存は、スレッドの中の `~/.cache/ja-proofread/deps` に入り、スレッドごとに入れ直します（数十秒）。環境変数 `JA_PROOFREAD_DATA` は付けません（付けると、記録と依存の置き場がその下に変わります）。
 
 ### 版を固定する
 
@@ -119,7 +119,7 @@ curl -fsSLo /tmp/ja-proofread-setup.mjs https://raw.githubusercontent.com/andy09
 
 ## できないこと
 
-- 書いた直後の自動のフックはありません。プロジェクト指示で毎回実行するよう頼んでいるだけなので、Claude が守らないことがあります（実行を飛ばす、「必ず」を直さずに渡す、など）。渡されたときに校正の件数が書いていなければ、「proofread を実行して」と頼みます。
+- 書いた直後の自動のフックはありません。プロジェクト指示で毎回実行するよう頼んでいるだけなので、Claude は守らないことがあります（実行を飛ばす、「必ず」を直さずに渡す、など）。渡されたときに校正の件数が書いていなければ、「proofread を実行して」と頼みます。
 - 台帳を育てる最後の段階（承認された候補を台帳に反映して版を上げる `ledger.mjs apply`）は、このマーケットプレイスのリポジトリの作業コピーで行います。kit の中ではできません。
 - 照らし合わせで防げるのは、kit の中のファイルの書き換えです。記録の置き場（`ja-proofread-data`）の中身（検出と誤検知の記録）は照らし合わせに入らず、書き換えられると台帳を育てるときの数（`ledger.mjs stats`）が変わります。正規表現の検査の記録は、kit ではスレッドの中に置くので、共有の置き場の書き換えでは安全の確認を飛ばせません。
 - 環境のネットワークが None だと、1. の curl も、textlint の依存（registry.npmjs.org）も届きません。Limited で「Allow package managers」に印が付いた既定の状態なら、どちらも届きます（[Network access](https://code.claude.com/docs/en/cloud-environments#network-access)）。textlint が入らないときは、構成の型と件数で数える型だけが動きます。

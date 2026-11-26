@@ -10,9 +10,9 @@ curl -fsSLo /tmp/ja-proofread-setup.mjs https://raw.githubusercontent.com/andy09
 
 手元の Claude Code で使うなら [install-local.md](install-local.md) です。claude.ai/customize/plugins でアカウントにプラグインを足す方法は、公式の説明ではクラウドセッションにも読み込まれるとされていますが、持ち主の環境では、その画面でこのマーケットプレイスの追加ができなかったので、主な手順にはせず参考に回しています（下の B1）。
 
-claude.ai/code の Projects で使うなら、リポジトリがあってもなくても、[install-projects.md](install-projects.md) の kit（`/mnt/project-files` に一式を書き、プロジェクト指示で毎回の校正を頼む）が主な手順です。
+claude.ai/code の Projects で使うなら、リポジトリの有無にかかわらず、[install-projects.md](install-projects.md) の kit（`/mnt/project-files` に一式を書き、プロジェクト指示で毎回の校正を頼む）が主な手順です。
 
-この文書の「claude.ai の Projects」は、claude.ai/code の Projects（Claude Code の Projects）のことです。claude.ai のチャットのプロジェクト（claude.ai の Projects。プロジェクトの指示・ファイル・スキルを入れて使うもの）では、Claude Code もプラグインも動かないので、スキルの zip を上げて使います。[install-claude-ai.md](install-claude-ai.md) を見てください。
+この文書の「claude.ai の Projects」は、claude.ai/code の Projects（Claude Code の Projects）のことです。claude.ai のチャットのプロジェクト（claude.ai の Projects。プロジェクトの指示・ファイル・スキルを入れて使うもの）では、Claude Code とプラグインは動かないので、スキルの zip を上げて使います。[install-claude-ai.md](install-claude-ai.md) を見てください。
 
 ## 先に、どこで動くか
 
@@ -128,7 +128,7 @@ cd <対象のリポジトリ> && git add .claude/ja-proofread .claude/skills/ja-
 3. 最初の起動で依存が入ります（数十秒）。入れる先はコンテナの中なので、セッションのたびに入れ直します。入れられなかったときは、その旨が Claude と画面に出ます。
 4. 「この文書を校正して」と頼むか、`/ja-proofread-proofread` を呼びます。
 
-Projects のクラウドで動くスレッドで使うときは、同梱したリポジトリをプロジェクトのリポジトリ（Project settings > Environment の Project repositories）に入れて、新しいスレッドを始めます。プロジェクトのリポジトリにするには、つないだ GitHub のアカウントにそのリポジトリへの push の権限があり、そのリポジトリに Claude GitHub App が入っている必要があります。`/web-setup` でつないだトークンは、ほかのクラウドセッションでは使えても、Projects のクラウドのスレッドには足りません（[Check the prerequisites](https://code.claude.com/docs/en/claude-projects#check-the-prerequisites)、[Set up GitHub access](https://code.claude.com/docs/en/claude-projects#set-up-github-access)）。フックは動かないので、書いた直後の校正と、起動のときの依存の準備はありません。「この文書を校正して」と頼むか `/ja-proofread-proofread` を呼ぶと、スキルの準備で依存を入れてから校正します（未確認）。依存は、プロジェクトのクラウドの環境のセットアップスクリプトで入れる手もあります（[Limitations in cloud sessions](https://code.claude.com/docs/en/cloud-environments#limitations-in-cloud-sessions)。このプラグインでは試していません）。書いた直後の校正の代わりは、[install-projects.md](install-projects.md) の kit とプロジェクト指示です（同梱と一緒に使えます）。
+Projects のスレッドのうちクラウドで動くものに使うときは、同梱したリポジトリをプロジェクトのリポジトリ（Project settings > Environment の Project repositories）に入れて、新しいスレッドを始めます。プロジェクトのリポジトリにするには、つないだ GitHub のアカウントにそのリポジトリへの push の権限があり、そのリポジトリに Claude GitHub App が入っている必要があります。`/web-setup` のトークンは、ほかのクラウドセッションには使えても、Projects のクラウドのスレッドには足りません（[Check the prerequisites](https://code.claude.com/docs/en/claude-projects#check-the-prerequisites)、[Set up GitHub access](https://code.claude.com/docs/en/claude-projects#set-up-github-access)）。フックは動かないので、書いた直後の校正と、起動のときの依存の準備はありません。「この文書を校正して」と頼むか `/ja-proofread-proofread` を呼ぶと、スキルの準備で依存を入れてから校正します（未確認）。依存は、プロジェクトのクラウドの環境のセットアップスクリプトに入れる手もあります（[Limitations in cloud sessions](https://code.claude.com/docs/en/cloud-environments#limitations-in-cloud-sessions)。このプラグインでは試していません）。書いた直後の校正の代わりは、[install-projects.md](install-projects.md) の kit とプロジェクト指示です（同梱と一緒に使えます）。
 
 ### 新しい版にする
 
@@ -157,7 +157,7 @@ curl -fsSLo /tmp/ja-proofread-setup.mjs https://raw.githubusercontent.com/andy09
 
 手元のプラグインの写しからなら `node ~/.claude/plugins/marketplaces/ja-doc-proofreading/plugins/ja-proofread/scripts/install-into-project.mjs <対象のリポジトリ> --remove`、クローンした作業コピーからなら `ja-doc-proofreading/plugins/ja-proofread/scripts/install-into-project.mjs` に読み替えます。
 
-フックと、同梱したときに入れた部品だけが消えます。何を入れたかは同梱のときに `.claude/ja-proofread/vendored.json` に記録しているので、あとから自分で足した `ja-proofread-` で始まるスキルなどは残ります。同梱のときに `.claude/settings.json` や `.claude/skills/` などを新しく作っていたなら、空になったものも消します。一度も同梱していないリポジトリで実行したときは、何も変えずに終わります。
+フックと、同梱したときに入れた部品だけが消えます。同梱したものの一覧は `.claude/ja-proofread/vendored.json` に記録しています。そのため、あとから自分で足したスキルなどは、名前が `ja-proofread-` から始まっていても残ります。同梱のときに `.claude/settings.json` や `.claude/skills/` などを新しく作っていたなら、空になったものも消します。一度も同梱していないリポジトリで実行したときは、何も変えずに終わります。
 
 `.ja-proofread.json` は残すので、要らなければ消します。消えたことをリポジトリにも反映するため、コミットしてプッシュします。ステージするのは同梱したものの名前だけにします（`ja-proofread-*` のような書き方にすると、自分で置いた `ja-proofread-mine` のようなスキルの変更まで一緒に入るため）。同梱したものの一覧は、やめる前の `.claude/ja-proofread/vendored.json` にあります。下はこの版の一覧で、表示される例と同じ並びです（表示では、コミットしていたものだけに絞られます）。
 
@@ -206,7 +206,7 @@ claude.ai のアカウントで有効にしたスキルは、クラウドセッ�
 - Projects は Pro・Max・Ultra のプランだけで使えます
 - claude.ai のアカウントでログインしているときだけ使えます（`/login`）。API キー、Amazon Bedrock・Google Cloud の Agent Platform・Microsoft Foundry、`ANTHROPIC_BASE_URL` をほかのホストに向けているとき、Claude apps gateway からのログインでは使えません
 - 環境変数 `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC` か `CLAUDE_CODE_DISABLE_FEATURE_FLAGS` を設定していると、Remote Control は使えません。シェルの環境と、`settings.json` の `env` の両方から外します
-- まだ信頼していないフォルダーで `claude remote-control` を動かすと、ワークスペースを信頼するか（`Trust <directory>? [y/N]`）を聞かれます。`y` と答えると覚えます（ホームディレクトリでは覚えず、毎回聞かれます）。端末から動かしていないときは聞けないので、`Workspace not trusted` で止まります
+- まだ信頼していないフォルダーで `claude remote-control` を動かすと、ワークスペースを信頼するか（`Trust <directory>? [y/N]`）を聞かれます。`y` を選ぶと覚えます（ホームディレクトリでは覚えず、毎回聞かれます）。端末から動かしていないときは聞けないので、`Workspace not trusted` で止まります
 - スレッドが動くのは、そのコンピューターが起きていて Remote Control がつながっている間だけです
 - アカウントで「Require trusted devices」が有効なときは、「Work locally」が灰色になり、そのプロジェクトのスレッドを自分のコンピューターで動かせません。そのフォルダーで作業するときは、そのコンピューターで Claude Code を直接動かします（[Trusted Devices](https://code.claude.com/docs/en/remote-control#trusted-devices)。Pro・Max・Ultra では本人が Cowork か Account の設定でオンにします）
 - 準備：デスクトップアプリの Settings > Code（または Settings > Claude Code）で「Use this computer from your phone and claude.ai」をオンにし、そのスイッチの下の一覧にフォルダーを足します（アプリを開いている間だけ動きます）。または、そのフォルダーで `claude remote-control` を実行したままにします

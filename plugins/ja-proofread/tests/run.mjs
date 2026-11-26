@@ -1173,7 +1173,7 @@ ok("同梱したスキルに、プラグインのデータ置き場の説明が�
   const badRefs = refPaths.filter((p) => !names.includes("ja-proofread/" + p) && !names.some((n) => n.startsWith("ja-proofread/" + p + "/")));
   ok("スキルの本文（SKILL.md と references/）に、プラグイン用の変数・プラグインだけの案内・Notion への自動の登録・サブエージェントの接頭辞つきの名前が残らず、$D の指すファイルが zip にある。${CLAUDE_SKILL_DIR} は SKILL.md の最初の手順の1か所だけ", (allText.match(/\$\{CLAUDE_SKILL_DIR\}/g) || []).length === 1 && !allText.includes("${CLAUDE_PLUGIN") && !allText.includes("plugin-only") && !/JA_PROOFREAD_DATA=/.test(allText) && !/autoRegisterCandidates/.test(allText) && !/ja-proofread:(structure-reviewer|fresh-eyes-reader)/.test(allText) && refPaths.length >= 8 && badRefs.length === 0, "指す先がない：" + badRefs.join(","));
   const refsAll = ["write", "proofread", "grow-ledger"].map((n) => text(`ja-proofread/references/${n}.md`)).join("\n");
-  ok("SKILL.md と references/ に、チャットでの読み替え（同じ会話で役を変える、別の会話に貼ると独立性が上がる、仕上げは頼まれたときだけ、Notion は頼まれたときだけ、Node が無いときの点検）がある", /別の会話に貼って読ませると、?独立性が上がる/.test(skill) && /別の会話に貼って読ませると、?独立性が上がる/.test(refsAll) && /頼まれたときだけ/.test(skill) && /本人が頼んだときだけ/.test(skill) && /node -v/.test(skill) && /ledger\.json/.test(skill) && /textlint もスクリプトも動かなかった/.test(skill) && /本人に頼まれたときだけ/.test(text("ja-proofread/references/write.md")) && /上げ直します/.test(text("ja-proofread/references/grow-ledger.md")));
+  ok("SKILL.md と references/ に、チャットでの読み替え（同じ会話で役を変える、別の会話に貼ると独立性が上がる、仕上げは頼まれたときだけ、Notion は頼まれたときだけ、Node が無いときの点検）がある", /別の会話に貼って読ませると、?独立性が上がる/.test(skill) && /別の会話に貼って読ませると、?独立性が上がる/.test(refsAll) && /頼まれたときだけ/.test(skill) && /本人が頼んだときだけ/.test(skill) && /node -v/.test(skill) && /ledger\.json/.test(skill) && /textlint とスクリプトは動かなかった/.test(skill) && /本人に頼まれたときだけ/.test(text("ja-proofread/references/write.md")) && /上げ直します/.test(text("ja-proofread/references/grow-ledger.md")));
   const agentsText = fileEnts.filter((e) => e.name.startsWith("ja-proofread/references/agents/")).map((e) => e.data.toString("utf8")).join("\n");
   const readerTest = text("ja-proofread/templates/reader-test.md");
   ok("役の指示に Claude Code 向けの frontmatter（tools: など）が残らず、templates/reader-test.md はサブエージェントを起動する文をチャット向けに書き直してある", agentsText.length > 0 && !/^---$/m.test(agentsText) && !/^tools:/m.test(agentsText) && /1人ずつ順に行います/.test(readerTest) && !/サブエージェントとして起動|ja-proofread:/.test(readerTest));
@@ -1182,7 +1182,7 @@ ok("同梱したスキルに、プラグインのデータ置き場の説明が�
   // （下で展開したフォルダで試す）
   // PROJECT-INSTRUCTIONS.md
   const piText = readFileSync(join(CAI, "PROJECT-INSTRUCTIONS.md"), "utf8");
-  const paste = (piText.split("----- 貼る部分ここから（この行は貼らない） -----\n")[1] || "").split("\n----- 貼る部分ここまで（この行は貼らない） -----")[0];
+  const paste = (piText.split("`----- 貼る部分ここから（この行は貼らない） -----`\n")[1] || "").split("\n`----- 貼る部分ここまで（この行は貼らない） -----`")[0];
   ok("PROJECT-INSTRUCTIONS.md の貼る部分は1,500字まで、ja-proofread スキルで毎回校正すること、見つからなければ校正できなかったと伝えることを書き、終わりの行で終わる", paste.length > 0 && [...paste].length <= 1500 && /ja-proofread スキルで毎回校正/.test(paste) && /校正できなかった/.test(paste) && paste.endsWith("（ja-proofread の指示はここまで）"), [...paste].length);
   ok("コード実行や Node が使えないときの扱いが、貼る部分と SKILL.md でそろっている（台帳と辞書を読んでもよいが、校正したとは書かない。textlint が動かなかったと伝える）", /校正したとは書かず/.test(paste) && /textlint が動かなかった/.test(paste) && /校正したとは書かず/.test(skill) && /件数は書きません/.test(skill) && /件数は書きません/.test(paste));
   // 展開して読み取り専用にしたフォルダから、空の HOME で ensure-deps と proofread が動き、スキルのフォルダには何も書かない

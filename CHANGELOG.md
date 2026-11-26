@@ -1,5 +1,14 @@
 # 変更履歴
 
+## 0.1.17（2026-11-26）
+- 同梱の一式 `dist/ja-proofread-setup.mjs` の sha256：`dd7cde9f9f832831b294320b80dab2fe31ae7cf0ca87bed1da2442ed234bb490`
+- claude.ai のスキル `dist/claude-ai/ja-proofread-skill.zip` の sha256：`77ce7faaca92f5f34c2c2de3583ba7dad12043807e8c63bde15f0262d7159ff7`
+- 手順書とスキルの文を、このプラグインで校正した。台帳の型は変えていない（台帳の版は plugin.json とそろえて 0.1.17 にした）。
+- README.md・docs/install-claude-ai.md・install-projects.md・install-cloud.md、dist/claude-ai/PROJECT-INSTRUCTIONS.md、claude.ai のスキルの SKILL.md と references/ の「必ず」を0件にした（主に助詞の重複）。意味は変えていない。install-claude-ai.md の、わざと「おトク」「ユーザ」と書いた例は、`<!-- textlint-disable prh -->` で囲んで数えないようにした。
+- `agents/structure-reviewer.md`：返し方の表に区切りの行（`|---|`）を足した（足りないと表にならず、文として校正されていた）。
+- claude.ai の `PROJECT-INSTRUCTIONS.md`：貼る部分の区切りの2行をインラインのコードにした（文末の句点の規則に当たっていた）。貼る部分そのものは変えていない。
+- install-claude-ai.md の確かめたことを、0.1.16 で `claude -p` が「必ず」を直して渡した結果に書き直した。
+
 ## 0.1.16（2026-11-26）
 - 同梱の一式 `dist/ja-proofread-setup.mjs` の sha256：`06e7749ea4251eb8237c3bbcc814292f7bd1d08f6c83218ecea68ab82e275660`
 - claude.ai のスキル `dist/claude-ai/ja-proofread-skill.zip` の sha256：`5f2472074a5b313f26cc2a202e8c6301e6475fba79758738f9e9809ec9aaed70`

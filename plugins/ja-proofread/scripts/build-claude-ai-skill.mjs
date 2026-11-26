@@ -28,8 +28,9 @@ export const SKILL_NAME = "ja-proofread";
 // スキルでは使わないスクリプト（同梱・kit・一式・このスクリプト、フック）
 const SKIP_SCRIPTS = new Set(["build-setup.mjs", "build-claude-ai-skill.mjs", "install-into-project.mjs", "install-project-kit.mjs", "hook-post-edit.mjs"]);
 const DIR = "$D";
-const BEGIN_LINE = "----- 貼る部分ここから（この行は貼らない） -----";
-const END_LINE = "----- 貼る部分ここまで（この行は貼らない） -----";
+// 区切りの行は、校正の「文末の句点」に当たらないよう、インラインのコードにする（貼るのは2行の間だけ）
+const BEGIN_LINE = "`----- 貼る部分ここから（この行は貼らない） -----`";
+const END_LINE = "`----- 貼る部分ここまで（この行は貼らない） -----`";
 const END_MARK = "（ja-proofread の指示はここまで）";
 const RAW_ZIP = "https://raw.githubusercontent.com/andy0911/ja-doc-proofreading/main/dist/claude-ai/ja-proofread-skill.zip";
 
@@ -92,7 +93,7 @@ ${findD(v).split("\n").map((l) => "   " + l).join("\n")}
 ## コード実行や Node が使えないとき、依存が入らないとき
 
 - Node はあるが依存が入らない（npm が無い、registry.npmjs.org に届かない）：proofread.mjs はそのまま動き、構成の型と件数で数える型だけを点検します。件数を伝えるときに、textlint は動かなかったと書きます。
-- コード実行や Node が使えない：校正はできません。校正したとは書かず、校正できなかった（textlint もスクリプトも動かなかった）と伝えます。代わりに、\`${DIR}/data/ledger.json\`（台帳の型）と \`${DIR}/data/prh.yml\`（表記の辞書）を読んで文書を点検してもかまいませんが、それは「目で見た点検」として伝え、校正の件数は書きません。
+- コード実行や Node が使えない：校正はできません。校正したとは書かず、校正できなかった（textlint とスクリプトは動かなかった）と伝えます。代わりに、\`${DIR}/data/ledger.json\`（台帳の型）と \`${DIR}/data/prh.yml\`（表記の辞書）を読んで文書を点検してもかまいませんが、それは「目で見た点検」として伝え、校正の件数は書きません。
 
 ## 書く前（新しく書くとき）
 
