@@ -16,7 +16,7 @@ function report(msg) {
   if (quiet) {
     process.stdout.write(JSON.stringify({
       systemMessage: `ja-proofread: ${msg}`,
-      hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: `ja-proofread: ${msg} 校正では構成チェックだけが動き、textlint の指摘（表記・文法・AIっぽい語句）は出ません。校正の結果を伝えるときは、このことを利用者に伝えてください。` },
+      hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: `ja-proofread: ${msg} 校正では、Node だけで動く構成の型と件数で数える型だけが動き、textlint の指摘（表記・文法・AIっぽい語句、台帳の語句の型）は出ません。校正の結果を伝えるときは、このことを利用者に伝えてください。` },
     }));
   } else process.stderr.write(`ja-proofread: ${msg}\n`);
 }

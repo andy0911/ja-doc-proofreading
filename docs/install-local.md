@@ -40,14 +40,14 @@ claude plugin marketplace add andy0911/ja-doc-proofreading
 claude plugin install ja-proofread@ja-doc-proofreading --scope user
 ```
 
-Claude Code の中からなら、`/plugin marketplace add andy0911/ja-doc-proofreading` のあと `/plugin install ja-proofread@ja-doc-proofreading` でも同じです。
+Claude Code の中からなら、`/plugin marketplace add andy0911/ja-doc-proofreading` のあと `/plugin install ja-proofread@ja-doc-proofreading` でも入れられます。ただし、セッションの中の `/plugin install` はすぐには入れず、そのプラグインの詳細の画面を開きます。そこでスコープを選んで入れます（[Install a plugin](https://code.claude.com/docs/en/plugins/install#install-a-plugin)）。
 
 `--scope` の意味は次のとおりです。
 
 | scope | 効く範囲 |
 |---|---|
 | `user` | 自分のすべてのプロジェクト |
-| `project` | そのプロジェクトだけ。`.claude/settings.json` に書かれ、コミットすると仲間にも有効になる |
+| `project` | そのプロジェクトだけ。`.claude/settings.json` に書かれ、コミットすると仲間にも有効になる。ただし仲間の端末には入らない（7. を参照） |
 | `local` | そのプロジェクトの自分だけ（`.claude/settings.local.json`） |
 
 ## 3. 動くか確かめる
@@ -154,6 +154,8 @@ claude plugin marketplace remove ja-doc-proofreading
 ```
 
 `local` で入れたときは `--scope local` をつけて外します。
+
+`claude plugin marketplace remove` は、`--scope` をつけないと、すべてのスコープからこのマーケットプレイスの宣言を消します。共有の `.claude/settings.json` の `extraKnownMarketplaces`（7. で仲間と共有したもの）からも消えます。最後のスコープから消えると、このマーケットプレイスから入れたプラグインもすべて外れ、そのデータ置き場も消えます（[plugin marketplace remove](https://code.claude.com/docs/en/plugins/cli-reference#plugin-marketplace-remove)）。プロジェクトで仲間と共有しているときは、`marketplace remove` の行は実行しないでください。自分の分を外すだけなら、uninstall の行で足ります。
 
 `--scope project` で入れたときは注意します。`claude plugin uninstall ja-proofread@ja-doc-proofreading --scope project` は、共有の（コミットする）`.claude/settings.json` からこのプラグインを消すので、仲間の分まで止まります。自分だけ止めたいときは、Claude Code の中で `/plugin` の Installed タブからこのプラグインを選んで Uninstall を選び、「Disable for me」を選びます。自分の `.claude/settings.local.json` に無効と書かれ、プロジェクトには入ったままになります（[Uninstall a plugin the project enables](https://code.claude.com/docs/en/plugins/install#uninstall-a-plugin-the-project-enables)）。プロジェクトの全員でやめるときだけ、`--scope project` の uninstall を使い、変わった `.claude/settings.json` をコミットします。
 

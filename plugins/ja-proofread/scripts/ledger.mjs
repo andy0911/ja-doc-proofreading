@@ -70,7 +70,7 @@ export function validateLedger(ledger, { pluginVersion } = {}) {
     if (!TYPES.includes(t)) { errors.push(`${where}: detect.type は ${TYPES.join("/")} のどれかです`); continue; }
     if (t === "regex" || t === "regex-count" || p.detect.pattern) regexes.push({ where, source: p.detect.pattern, flags: p.detect.flags });
     if (t === "structure" && !DETECTORS.includes(p.detect.detector)) errors.push(`${where}: detector は ${DETECTORS.join("/")} のどれかです`);
-    // closing-lines は pattern で締めの行を探すので、pattern が無いと校正のたびに落ちる
+    // closing-lines は pattern で締めの行を探す。pattern が無いと new RegExp(undefined) が何にでも当たり、40字以下で終わる節のすべてが誤検知になる
     if (t === "structure" && p.detect.detector === "closing-lines" && (typeof p.detect.pattern !== "string" || !p.detect.pattern)) errors.push(`${where}: structure の closing-lines には pattern（正規表現の文字列）が要ります`);
     if (t === "review" && !p.id.startsWith("R")) errors.push(`${where}: レビュー観点だけの型は R から始まる id にしてください`);
   }
@@ -150,7 +150,7 @@ export function droppedDetectKeys(oldDetect = {}, newDetect = {}, id = "") {
   for (const k of Object.keys(oldDetect.threshold || {})) if (!(k in (newDetect.threshold || {}))) notes.push(`threshold.${k}`);
   for (const k of Object.keys(oldDetect)) {
     if (k === "flags" || k === "threshold" || oldDetect[k] === undefined || newDetect[k] !== undefined) continue;
-    // pattern が消えると、型が何も検出しなくなるか、校正のたびに落ちる。書き忘れのことが多いので止める
+    // pattern が消えると、new RegExp(undefined) が何にでも当たるため、誤検知が大量に出る（closing-lines なら40字以下で終わる節のすべて）。書き忘れのことが多いので止める
     if (k === "pattern") errors.push(`${id} の detect は丸ごと置き換わるため、今の pattern が無くなります。変えないときも "pattern" を書いてください（正規表現を使わない型にするつもりなら、retire してから add で新しい型にしてください）`);
     else notes.push(k);
   }

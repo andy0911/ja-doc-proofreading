@@ -71,9 +71,11 @@ function removeIfEmpty(d) {
 // すでにフックが入っている settings.json（2回目の同梱や --remove の前）は .bak にしない。
 // 上書きすると、.bak がフック入りの設定になり、元に戻す役に立たなくなるため
 const hasOurHooks = (st) => Object.values(st?.hooks || {}).some((gs) => Array.isArray(gs) && gs.some((g) => (g.hooks || []).some((h) => (h.command || "").includes(MARK))));
+// 今回の実行で .bak を作ったか（作ったときだけ、.bak の案内を出す）
+let madeBak = false;
 function writeSettings(settings, original) {
   mkdirSync(claudeDir, { recursive: true });
-  if (existsSync(settingsPath) && !hasOurHooks(original)) copyFileSync(settingsPath, settingsPath + ".bak");
+  if (existsSync(settingsPath) && !hasOurHooks(original)) { copyFileSync(settingsPath, settingsPath + ".bak"); madeBak = true; }
   writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
 }
 
@@ -84,7 +86,8 @@ if (resolve(ROOT) === resolve(vendorDir)) {
 
 // 既存の settings.json は、JSON として読めなければ何も変えずに止める（コメントや末尾のカンマを消してしまわないため）
 let settings = {};
-if (existsSync(settingsPath)) {
+const settingsBefore = existsSync(settingsPath);
+if (settingsBefore) {
   try { settings = JSON.parse(readFileSync(settingsPath, "utf8")); }
   catch (e) {
     console.error(`${settingsPath} を JSON として読めないため、何も変えずに止めました（${e.message}）。コメントや末尾のカンマがあれば消してから、もう一度実行してください。`);
@@ -147,9 +150,9 @@ for (const name of readdirSync(join(ROOT, "skills"))) {
     .replace(/^name:\s*(.+)$/m, `name: ${SKILL_PREFIX}$1`)
     .replaceAll('JA_PROOFREAD_DATA="${CLAUDE_PLUGIN_DATA}" ', "")
     // データ置き場の説明は、同梱した版では当てはまらない（フックと同じ既定の場所を使う）ので、段落ごと差し替える
-    .replace(/^スクリプトは、下のコマンドの形のまま動かします。頭の `JA_PROOFREAD_DATA=…` は[^。]*。(?:外すと[^。]*。)?$/gm, "スクリプトは、下のコマンドの形のまま動かします。データ置き場は、書いた直後のフックと同じ既定の場所（`~/.cache/ja-proofread/`）です。")
+    .replace(/^スクリプトは、下のコマンドの形のまま動かします。頭の `JA_PROOFREAD_DATA=…` は[^。]*。(?:外すと[^。]*。)?$/gm, "スクリプトは、下のコマンドの形のまま動かします。データ置き場は、書いた直後のフックと同じ既定の場所（`~/.cache/ja-proofread/`。環境変数 `XDG_CACHE_HOME` を設定しているときは `$XDG_CACHE_HOME/ja-proofread/`）です。")
     .replace(/頭の `JA_PROOFREAD_DATA=…` は[^。]*。(?:外すと[^。]*。)?/g, "")
-    .replaceAll("| プラグインのデータ置き場 |", "| データ置き場（`~/.cache/ja-proofread/`） |")
+    .replaceAll("| プラグインのデータ置き場 |", "| データ置き場（`~/.cache/ja-proofread/`。`XDG_CACHE_HOME` を設定しているときは `$XDG_CACHE_HOME/ja-proofread/`） |")
     // プラグインとして入れたときだけの案内は消す（同梱した版から install-into-project は動かせないため）
     .replace(/[ \t]*<!-- plugin-only -->[\s\S]*?<!-- \/plugin-only -->\n?/g, "")
     // 同梱したサブエージェントは、プラグインの接頭辞なしの名前で呼ぶ
@@ -188,9 +191,10 @@ if (!existsSync(cfgPath)) {
 }
 
 const v = readJSON(join(ROOT, ".claude-plugin", "plugin.json")).version;
-// settings.json.bak は、もとから settings.json があったときだけ作る。無いときは .bak の案内を出さない
+// settings.json.bak は、もとから settings.json があったときだけ作る。.bak の案内は、今回の実行で作ったときだけ出す
+// （2回目の同梱では作らないので、前の .bak を今回の元のファイルのように案内しない）
 const hasBak = existsSync(settingsPath + ".bak");
-const bakNote = hasBak ? "。元のファイルは settings.json.bak" : created.settings ? "。settings.json はもともと無かったため新しく作りました（.bak はありません）" : "";
+const bakNote = madeBak ? "。元のファイルは settings.json.bak" : !settingsBefore ? "。settings.json はもともと無かったため新しく作りました（.bak はありません）" : "";
 console.log(`ja-proofread v${v} を ${target} に同梱しました。
 - 本体: .claude/ja-proofread/
 - スキル: .claude/skills/${SKILL_PREFIX}write, ${SKILL_PREFIX}proofread, ${SKILL_PREFIX}grow-ledger

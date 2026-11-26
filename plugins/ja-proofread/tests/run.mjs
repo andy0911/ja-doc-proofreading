@@ -19,14 +19,16 @@ const made = [];
 const tmp = (p) => { const d = mkdtempSync(join(tmpdir(), p)); made.push(d); return d; };
 const cleanup = () => { for (const d of made.splice(0)) { try { rmSync(d, { recursive: true, force: true }); } catch { /* 消せなくても続ける */ } } };
 process.on("exit", cleanup);
-const tmpBefore = new Set(readdirSync(tmpdir()));
 // 条件を調べる途中で例外が出ても、テスト全体を止めずに ✗ として数える
 const safe = (f) => { try { return f(); } catch (e) { return false; } };
 
 const OUTER_DATA = process.env.JA_PROOFREAD_DATA || process.env.CLAUDE_PLUGIN_DATA || join(process.env.XDG_CACHE_HOME || join(homedir(), ".cache"), "ja-proofread");
 const DATA = tmp("jp-data-");
 if (existsSync(join(OUTER_DATA, "deps"))) symlinkSync(join(OUTER_DATA, "deps"), join(DATA, "deps"));
-const BASE_ENV = { ...process.env, JA_PROOFREAD_DATA: DATA };
+// 子プロセスの一時ディレクトリ（runTextlint が作る ja-proofread-*）は、このテストだけの場所に作らせる。
+// /tmp を見ると、同じ計算機で動くほかのプロセス（ほかのテストやフック）が作ったものまで数えてしまうため
+const CHILD_TMP = tmp("jp-childtmp-");
+const BASE_ENV = { ...process.env, JA_PROOFREAD_DATA: DATA, TMPDIR: CHILD_TMP };
 delete BASE_ENV.CLAUDE_PLUGIN_DATA;
 delete BASE_ENV.CLAUDE_PROJECT_DIR;
 const WORK = tmp("jp-cwd-");
@@ -698,8 +700,8 @@ ok("regexCache は記録の数を最初に1回だけ数え、get では数え直
 
 // 3-1. 時間の上限の環境変数が Infinity や負の数、数でないものなら既定値にする
 const budgetOf = (v) => run(["--input-type=module", "-e", `import { PRH_BUDGET_MS } from ${JSON.stringify(pathToFileURL(S("lib.mjs")).href)}; console.log(PRH_BUDGET_MS);`], { env: { JA_PROOFREAD_PRH_BUDGET_MS: v } }).stdout.trim();
-const budgets = ["Infinity", "-5", "abc", "1e400", "0", "5000"].map(budgetOf);
-ok("JA_PROOFREAD_PRH_BUDGET_MS は有限の正の数だけを使う（Infinity・-5・abc・1e400・0 は既定の20000、5000 は 5000）", JSON.stringify(budgets) === JSON.stringify(["20000", "20000", "20000", "20000", "20000", "5000"]), JSON.stringify(budgets));
+const budgets = ["Infinity", "-5", "abc", "1e400", "0", "5000", "500"].map(budgetOf);
+ok("JA_PROOFREAD_PRH_BUDGET_MS は有限の正の数だけを使い、下限は1000（Infinity・-5・abc・1e400・0 は既定の20000、5000 は 5000、500 は 1000）", JSON.stringify(budgets) === JSON.stringify(["20000", "20000", "20000", "20000", "20000", "5000", "1000"]), JSON.stringify(budgets));
 if (hasDeps) {
   const infDir = prhProj("version: 1\nrules:\n  - expected: 問い合わせ\n    pattern: 問合せ\n");
   const infRun = run([S("proofread.mjs"), "--json", write(infDir, "d.md", "# 窓口\n\n問合せは窓口で受けます。\n")], { cwd: infDir, env: { JA_PROOFREAD_PRH_BUDGET_MS: "Infinity" }, timeout: 60000 });
@@ -726,25 +728,82 @@ if (hasDeps) {
   ok("5000段の入れ子の prh 規則があっても校正全体は止まらず、その規則だけを外す", deepRep.ok === true && /1件の規則に使えない正規表現/.test(prhWarn(deepRep)) && /入れ子/.test(prhWarn(deepRep)) && prhMsgs(deepRep).some((m) => /問い合わせ/.test(m)), deepRun.stderr.slice(0, 300) + prhWarn(deepRep));
 }
 
-// 3-4. 選択肢のとても多い繰り返しも、形の検査の途中で締め切りを見る
+// 3-4. 選択肢のとても多い繰り返しも、形の検査の途中で締め切りを見る（0.1.6 からは、締め切りの前に確かめ終える）
 const manyAlt = "(?:" + Array.from({ length: 1500 }, (_, i) => String.fromCharCode(0x4e00 + i)).join("|") + "|\\p{Script=Greek})+";
 const altData = tmp("jp-manyalt-");
 process.env.JA_PROOFREAD_DATA = altData;
 t0 = performance.now();
-const manyRes = safe(() => checkRegexesCached([{ source: manyAlt, flags: "u" }], { budgetMs: 500 })) || [];
+const manyRes = safe(() => checkRegexesCached([{ source: manyAlt, flags: "u" }, { source: "むがいなご", flags: "u" }], { budgetMs: 20000 })) || [];
 const manyMs = Math.round(performance.now() - t0);
 if (outerEnvData === undefined) delete process.env.JA_PROOFREAD_DATA; else process.env.JA_PROOFREAD_DATA = outerEnvData;
 const manyCache = safe(() => json(readFileSync(join(altData, "regex-checked.json"), "utf8"))) || {};
-ok(`選択肢1500個の繰り返しでも、500ms の上限なら2秒以内に戻り、未確認（null）として記録に残さない（${manyMs}ms）`, manyMs < 2000 && manyRes.length === 1 && manyRes[0] === null && !Object.keys(manyCache).length, manyMs + JSON.stringify(manyRes));
+ok(`選択肢1501個の繰り返しを、20秒の上限を使い切らずに確かめ（${manyMs}ms）、後ろの無害な規則も通して記録に残す`, manyMs < 8000 && manyRes.length === 2 && Array.isArray(manyRes[0]) && !manyRes[0].length && Array.isArray(manyRes[1]) && !manyRes[1].length && Object.keys(manyCache).length >= 2, manyMs + JSON.stringify(manyRes));
+
+// 21. 0.1.6 で直した不具合の再現
+// 1. 選択肢の多い規則が毎回未確認になり、予算を使い切って後ろの無害な規則まで外れていた
+// 記録や覚えた結果を使わないよう、上と別の文字で作る
+const manyAlt2 = "(?:" + Array.from({ length: 1500 }, (_, i) => String.fromCharCode(0x5800 + i)).join("|") + "|\\p{Script=Greek})+";
+t0 = performance.now();
+const v8 = safe(() => rs8.shapeProblem(manyAlt2, "u"));
+const manyShapeMs = Math.round(performance.now() - t0);
+ok(`選択肢1501個（\\p{Script=Greek} を含み、BMP の外まで当てる）の形の検査が2秒以内（${manyShapeMs}ms。0.1.5 では数分）`, v8 === null && manyShapeMs < 2000, JSON.stringify(v8) + manyShapeMs);
+const tooMany = "(?:" + Array.from({ length: 3000 }, (_, i) => String.fromCharCode(0x4e00 + i)).join("|") + "|\\p{Script=Greek})+";
+const tmData = tmp("jp-toomany-");
+process.env.JA_PROOFREAD_DATA = tmData;
+t0 = performance.now();
+const tm1 = safe(() => checkRegexesCached([{ source: tooMany, flags: "u" }], { budgetMs: 20000 })) || [];
+const tmMs = Math.round(performance.now() - t0);
+const tm2 = safe(() => checkRegexesCached([{ source: tooMany, flags: "u" }], { budgetMs: 1 })) || [];
+if (outerEnvData === undefined) delete process.env.JA_PROOFREAD_DATA; else process.env.JA_PROOFREAD_DATA = outerEnvData;
+ok(`確かめる手間が上限を超える選択（選択肢3001個）は、時刻によらず「確かめきれない」と拒否して記録に残し、次は記録を使う（${tmMs}ms）`, tmMs < 2000 && /手間が上限/.test(tm1[0]?.[0] || "") && /手間が上限/.test(tm2[0]?.[0] || ""), tmMs + JSON.stringify(tm1) + JSON.stringify(tm2));
+// 軽い規則から確かめる。重い規則で締め切りになっても、無害な規則は確かめ終え、記録が増えるので次の校正で進む
+const lightData = tmp("jp-light-");
+process.env.JA_PROOFREAD_DATA = lightData;
+const lightList = [...slowShapes, { source: "かるいご", flags: "u" }];
+const l1 = safe(() => checkRegexesCached(lightList, { budgetMs: 1500 })) || [];
+const l2 = safe(() => checkRegexesCached(lightList, { budgetMs: 1500 })) || [];
+const stuck = safe(() => checkRegexesCached([{ source: "(?:\\p{Script=Han}|ぽ)+", flags: "u" }], { budgetMs: 2 })) || [];
+if (outerEnvData === undefined) delete process.env.JA_PROOFREAD_DATA; else process.env.JA_PROOFREAD_DATA = outerEnvData;
+const nulls = (x) => x.filter((v) => v === null).length;
+ok("重い規則が先に並んでいても、後ろの無害な規則は1回目で確かめ終える", Array.isArray(l1[60]) && l1[60].length === 0 && nulls(l1) > 0, JSON.stringify(l1.slice(-2)) + nulls(l1));
+ok("確かめ終えたものが増えたときだけ progressed になり、次の校正では未確認が減る", l1.progressed === true && nulls(l2) < nulls(l1) && stuck[0] === null && stuck.progressed === false, `${l1.progressed} ${nulls(l1)} ${nulls(l2)} ${stuck.progressed}`);
+const libSrc = readFileSync(S("lib.mjs"), "utf8");
+ok("「次の校正で続きを確かめます」は、記録が増えたときだけ書く", /state\.progressed\s*\?\s*`[^`]*次の校正で続きを確かめます/.test(libSrc) && /results\.progressed\s*\?\s*`[^`]*次の校正で続きを確かめます/.test(libSrc));
 if (hasDeps) {
   const altDir2 = prhProj(`version: 1\nrules:\n  - expected: 多い語\n    pattern: /${manyAlt}/\n  - expected: 問い合わせ\n    pattern: 問合せ\n`);
-  const altDoc2 = write(altDir2, "d.md", "# 窓口\n\n問合せは窓口で受けます。\n");
-  t0 = performance.now();
-  r = run([S("hook-post-edit.mjs")], { input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: altDoc2 }, cwd: altDir2 }), env: { CLAUDE_PROJECT_DIR: altDir2, JA_PROOFREAD_PRH_BUDGET_MS: "2000" }, timeout: 60000 });
-  const altMs2 = Math.round(performance.now() - t0);
-  const altOut2 = json(r.stdout).hookSpecificOutput?.additionalContext || json(r.stdout).reason || "";
-  ok(`選択肢のとても多い prh 規則があってもフックが上限のうちに戻り、その規則だけを今回は外す（${altMs2}ms）`, !r.error && altMs2 < 20000 && /時間内に確かめ終わらなかった/.test(altOut2) && /問い合わせ/.test(altOut2), (r.error?.message || "") + altOut2.slice(0, 400));
+  const altDoc2 = write(altDir2, "d.md", "# 窓口\n\n問合せは窓口で聞きます。\n");
+  const altData2 = tmp("jp-altdata2-");
+  symlinkSync(join(OUTER_DATA, "deps"), join(altData2, "deps"));
+  const hookRun = () => {
+    const t = performance.now();
+    const rr = run([S("hook-post-edit.mjs")], { input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: altDoc2 }, cwd: altDir2 }), env: { CLAUDE_PROJECT_DIR: altDir2, JA_PROOFREAD_DATA: altData2, JA_PROOFREAD_PRH_BUDGET_MS: "20000" }, timeout: 60000 });
+    return { ms: Math.round(performance.now() - t), err: rr.error, out: json(rr.stdout).hookSpecificOutput?.additionalContext || json(rr.stdout).reason || "" };
+  };
+  const h1 = hookRun(), h2 = hookRun();
+  ok(`選択肢1501個の prh 規則の後ろの無害な規則が、2回目までに使われる（1回目 ${h1.ms}ms、2回目 ${h2.ms}ms）`, !h1.err && !h2.err && /問い合わせ/.test(h2.out) && !/確かめ終わらなかった/.test(h2.out), h1.out.slice(0, 300) + " / " + h2.out.slice(0, 300));
+  ok("選択肢1501個の prh 規則があっても、フックは prh の予算（20秒）を使い切らない", h1.ms < 15000 && h2.ms < 15000, `${h1.ms} / ${h2.ms}`);
 }
+// 2. specs で止まる1つ目の辞書が予算を使い切っても、2つ目の正常な辞書は使う（辞書ごとに時間を分ける）
+if (hasDeps) {
+  const spec2Dir = tmp("jp-spec2-");
+  write(spec2Dir, "team.yml", "version: 1\nrules:\n" + SLOW_SPEC);
+  write(spec2Dir, "good.yml", "version: 1\nrules:\n  - expected: 問い合わせ\n    pattern: 問合せ\n");
+  writeFileSync(join(spec2Dir, ".ja-proofread.json"), JSON.stringify({ prh: ["team.yml", "good.yml"] }));
+  write(spec2Dir, "d.md", "# 窓口\n\n問合せは窓口で受けます。\n");
+  r = run([S("hook-post-edit.mjs")], { input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: join(spec2Dir, "d.md") }, cwd: spec2Dir }), env: { CLAUDE_PROJECT_DIR: spec2Dir, JA_PROOFREAD_PRH_BUDGET_MS: "4000" }, timeout: 30000 });
+  const spec2Out = json(r.stdout).hookSpecificOutput?.additionalContext || json(r.stdout).reason || "";
+  ok("specs で止まる辞書が1つ目でも、2つ目の正常な辞書の規則は使い、止まる辞書だけを外す", !r.error && /team\.yml を時間内に読み終えなかった/.test(spec2Out) && !/good\.yml/.test(spec2Out) && /問い合わせ/.test(spec2Out) && /この辞書に回せた時間は [12](\.\d)?秒/.test(spec2Out), (r.error?.message || "") + spec2Out.slice(0, 500));
+}
+// 3. 巨大な正規表現でも RangeError で止まらない（形の検査の push、validate と apply が使う checkRegexes）
+const hugeSrc = "(?:" + "(?:あ|い)".repeat(200000) + ")x";
+const hugeShape = (() => { try { return rs8.shapeProblem(hugeSrc, ""); } catch (e) { return "throw " + e.message; } })();
+const hugeChk = (() => { try { const x = rs8.checkRegexes([{ source: hugeSrc, flags: "" }, { source: "ふつうのご", flags: "" }]); return x; } catch (e) { return "throw " + e.message; } })();
+ok("選択を20万個含む正規表現でも、形の検査は RangeError で止まらない", hugeShape === null, String(hugeShape).slice(0, 200));
+ok("checkRegexes は例外を出さず、ほかの規則も確かめる", Array.isArray(hugeChk) && hugeChk.length === 2 && Array.isArray(hugeChk[1]) && hugeChk[1].length === 0, String(JSON.stringify(hugeChk)).slice(0, 200));
+// 4. 記録の鍵に lib.mjs 側の判定の版も入る
+const idScript = write(tmp("jp-idjs-"), "t.mjs", `const rs = await import(${JSON.stringify(pathToFileURL(S("regex-safety.mjs")).href)});\nconst a = rs.CHECKER_ID, ka = rs.regexKey("かぎのご", "u");\nawait import(${JSON.stringify(pathToFileURL(S("lib.mjs")).href)});\nconsole.log(JSON.stringify({ a, b: rs.CHECKER_ID, ka, kb: rs.regexKey("かぎのご", "u") }));\n`);
+const ids6 = json(run([idScript]).stdout);
+ok("lib.mjs を読み込むと CHECKER_ID と記録の鍵が変わる（lib.mjs 側の判定の版が入る）", ids6.a && ids6.b && ids6.a !== ids6.b && ids6.ka !== ids6.kb && /addJudgeVersion\(createHash\("sha256"\)\.update\(checkRegexesCached\.toString\(\)\)/.test(libSrc), JSON.stringify(ids6));
 
 // 参考. 同梱の案内と、同梱したスキルの説明
 const nbProj = tmp("jp-nobak-");
@@ -754,12 +813,20 @@ mkdirSync(join(wbProj, ".claude"), { recursive: true });
 writeFileSync(join(wbProj, ".claude/settings.json"), "{}");
 const wbOut = run([S("install-into-project.mjs"), wbProj]).stdout;
 ok("settings.json が無かったプロジェクトに同梱しても .bak の案内を出さず、あったときは出す", !nbOut.includes("settings.json.bak") && /もともと無かった/.test(nbOut) && !existsSync(join(nbProj, ".claude/settings.json.bak")) && /元のファイルは settings\.json\.bak/.test(wbOut) && existsSync(join(wbProj, ".claude/settings.json.bak")), nbOut + wbOut);
-ok("同梱したスキルに、プラグインのデータ置き場の説明が残らない", ![vsk, vgl].some((x) => /JA_PROOFREAD_DATA=…|プラグインのデータ置き場/.test(x)) && /データ置き場は、書いた直後のフックと同じ既定の場所/.test(vsk) && /データ置き場は、書いた直後のフックと同じ既定の場所/.test(vgl));
+const wbOut2 = run([S("install-into-project.mjs"), wbProj]).stdout;
+ok("2回目の同梱では .bak を作らないので、.bak の案内を出さない", !wbOut2.includes("元のファイルは settings.json.bak") && !/もともと無かった/.test(wbOut2) && existsSync(join(wbProj, ".claude/settings.json.bak")), wbOut2);
+ok("同梱したスキルに、プラグインのデータ置き場の説明が残らず、XDG_CACHE_HOME のときの場所も書く", ![vsk, vgl].some((x) => /JA_PROOFREAD_DATA=…|プラグインのデータ置き場/.test(x)) && /データ置き場は、書いた直後のフックと同じ既定の場所/.test(vsk) && /データ置き場は、書いた直後のフックと同じ既定の場所/.test(vgl) && [vsk, vgl].every((x) => /\$XDG_CACHE_HOME\/ja-proofread\//.test(x)));
 
 // 12. 一時ディレクトリを残さない（このテストが作ったものは、ここで消す）
+// 子プロセスが作る ja-proofread-* は、子プロセスが終わってから消える。終わりきるまで（最大10秒）待ってから確かめる
+const childLeft = () => { try { return readdirSync(CHILD_TMP).filter((f) => /^(jp-|ja-proofread-)/.test(f)); } catch { return []; } };
+const sleeper = new Int32Array(new SharedArrayBuffer(4));
+for (let i = 0; i < 100 && childLeft().length; i++) Atomics.wait(sleeper, 0, 0, 100);
+const leftChild = childLeft();
+const ours = [...made];
 cleanup();
-const leftover = readdirSync(tmpdir()).filter((f) => /^(jp-|ja-proofread-)/.test(f) && !tmpBefore.has(f));
-ok("テストが作った一時ディレクトリ（jp-*、ja-proofread-*）は終わりに消える", leftover.length === 0, leftover.slice(0, 5).join(","));
+const leftover = [...leftChild, ...ours.filter((d) => existsSync(d))];
+ok("テストが作った一時ディレクトリ（jp-*、子プロセスの ja-proofread-*）は終わりに消える", leftover.length === 0, leftover.slice(0, 5).join(","));
 
 console.log(failed ? `\n${passed + failed} 項目中 ${failed} 件失敗` : `\n${passed} 項目すべて成功`);
 process.exit(failed ? 1 : 0);

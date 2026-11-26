@@ -3,6 +3,7 @@
 //   入れ子の量指定子（(あ+)+い など）は形で拒否する
 //   繰り返すグループの中の選択（(?:漢|漢字?)+ など）も形で拒否する。選択肢が重なると、長い文で止まるため。
 //     ただし、選択肢がどれも「1文字か文字クラス1つ」で、選択肢どうしが同じ文字に当たらないもの（(?:、|,)+ など）は通す
+//     （選択肢がとても多く、確かめる手間が上限を超えるものは、確かめきれないとして拒否する）
 //   長い繰り返し文字列（かな・カタカナ・漢字・全角英数字・記号・ASCII の記号・空白と改行の混ざった数万文字・
 //     正規表現に出てくる文字×2000 など）で時間を測り、遅いものを拒否する
 //   長さ0で一致し得るもの（空文字、? や * だけ、先読み・後読みだけ、など）を拒否する
@@ -150,36 +151,92 @@ function topAlternatives(content) {
 // 当たる文字は、実際に当てて確かめる。u なしは UTF-16 の0〜FFFF。u ありでも、選択肢に BMP の外の文字に当たり得るもの
 // （. \S \W \D \p \P 否定の文字クラス \u{…} サロゲートの \uD800〜\uDFFF BMP の外の文字そのもの）が無ければ、
 // 0〜FFFFだけを当てる（BMP の外の文字には、どの選択肢も当たらないため）
+//
+// 速く確かめるため、選択肢を1つずつ当てずに、全部をまとめた正規表現 ^(?:a|b|…)$ を各文字に1回だけ当てる。
+// 当たった文字だけを、選択肢を半分ずつにまとめた正規表現（二分木）で確かめ、2つ以上に当たるかを数える。
+// 1文字そのものの選択肢と文字クラスの選択肢は、別の木にする（文字クラスをまとめた正規表現は、1文字のものより重いため）。
+//
+// 確かめる手間（選択肢の重さの合計×当てる文字の数と、当たった文字を木で確かめた分）には上限 MAX_DISJOINT_WORK を設ける。
+// 超えるものは「確かめきれない」（unverifiable）として拒否する。時刻ではなく手間で決まるので、記録に残してよい
 const ASTRAL_CAPABLE = /\.|\\[SWDpP]|\[\^|\\u\{|\\u[dD][89a-fA-F]|[\uD800-\uDFFF]/;
+// 文字クラスの選択肢（[…] . \s \d \w \p{…} とその否定）。それ以外は1文字そのもの（エスケープを含む）
+const CLASS_LIKE = /^(?:\[|\.$|\\[sSdDwWpP])/;
+// 文字クラスの選択肢の重さ（1文字の選択肢を1とする）。手間を見積もるときに使う
+export const CLASS_WEIGHT = 16;
+export const MAX_DISJOINT_WORK = 2e9;
 const disjointMemo = new Map();
-// deadline（performance.now() の値）を渡すと、当てる途中でも一定の回数ごとに時刻を確かめ、越えたら PENDING を投げる
-// （選択肢がとても多いと、1件で数分かかることがあるため。確かめ終わらなかったものは覚えない）
+// deadline（performance.now() の値）を渡すと、当てる途中でも一定の文字数ごとに時刻を確かめ、越えたら PENDING を投げる
+// （時刻で止まったものは覚えない。手間の上限を超えたものは、時刻によらず決まるので覚える）
 const CHECK_EVERY = 4096;
-export function simpleDisjointAlternation(content, flags = "", { deadline = Infinity } = {}) {
+// 返すのは "yes"（重ならない）・"no"（重なる、または1文字か文字クラス1つでない選択肢がある）・"unverifiable"（手間の上限を超える）
+export function disjointVerdict(content, flags = "", { deadline = Infinity } = {}) {
   const f = [...new Set(String(flags).replace(/[^isu]/g, ""))].join("");
   const key = f + "\0" + content;
   if (disjointMemo.has(key)) return disjointMemo.get(key);
-  let ok = false, work = 0;
+  let v = "no";
   const parts = topAlternatives(content);
   if (parts.length >= 2 && parts.every((p) => SINGLE_ATOM.test(p))) {
-    try {
-      const res = parts.map((p) => new RegExp(`^(?:${p})$`, f));
-      const u = f.includes("u");
-      const max = u && parts.some((p) => ASTRAL_CAPABLE.test(p)) ? 0x10ffff : 0xffff;
-      ok = true;
-      for (let cp = 0; cp <= max && ok; cp++) {
-        // u ありで BMP の中だけを当てるときも、サロゲートの半分は1文字として当てる（u ありの [^…] などと同じ扱い）
-        const s = u ? String.fromCodePoint(cp) : String.fromCharCode(cp);
-        let n = 0;
-        for (const re of res) {
-          if (++work % CHECK_EVERY === 0 && performance.now() >= deadline) throw PENDING;
-          if (re.test(s) && ++n > 1) { ok = false; break; }
-        }
-      }
-    } catch (e) { if (e === PENDING) throw e; ok = false; }
+    try { v = disjointByScan(parts, f, deadline); }
+    catch (e) { if (e === PENDING) throw e; v = "no"; }
   }
-  disjointMemo.set(key, ok);
-  return ok;
+  disjointMemo.set(key, v);
+  return v;
+}
+
+// 互換のため残す。重ならないと確かめられたときだけ true
+export function simpleDisjointAlternation(content, flags = "", opts = {}) {
+  return disjointVerdict(content, flags, opts) === "yes";
+}
+
+// 選択肢をまとめた正規表現の二分木。w はその節の選択肢の重さの合計（当てたときの手間として数える）
+function buildTree(parts, f, weight) {
+  if (!parts.length) return null;
+  const build = (lo, hi) => {
+    const node = { re: new RegExp(`^(?:${parts.slice(lo, hi).join("|")})$`, f), w: (hi - lo) * weight, l: null, r: null };
+    if (hi - lo > 1) { const mid = (lo + hi) >> 1; node.l = build(lo, mid); node.r = build(mid, hi); }
+    return node;
+  };
+  return build(0, parts.length);
+}
+
+function disjointByScan(parts, f, deadline) {
+  const u = f.includes("u");
+  const max = u && parts.some((p) => ASTRAL_CAPABLE.test(p)) ? 0x10ffff : 0xffff;
+  const lits = parts.filter((p) => !CLASS_LIKE.test(p));
+  const classes = parts.filter((p) => CLASS_LIKE.test(p));
+  // まとめた正規表現を全部の文字に1回ずつ当てる手間。先に見積もり、上限を超えるなら当てずに決める
+  let work = (max + 1) * (lits.length + classes.length * CLASS_WEIGHT);
+  if (work > MAX_DISJOINT_WORK) return "unverifiable";
+  const trees = [buildTree(lits, f, 1), buildTree(classes, f, CLASS_WEIGHT)].filter(Boolean);
+  // 節 node に当たると分かっている文字 s が、その下の選択肢のいくつに当たるか（need 個まで数えたら止める）
+  const count = (node, s, need) => {
+    if (!node.l) return 1;
+    let n = 0;
+    for (const c of [node.l, node.r]) {
+      work += c.w;
+      if (c.re.test(s)) { n += count(c, s, need - n); if (n >= need) break; }
+    }
+    return n;
+  };
+  for (let cp = 0; cp <= max; cp++) {
+    if (cp % CHECK_EVERY === 0 && performance.now() >= deadline) throw PENDING;
+    // u ありで BMP の中だけを当てるときも、サロゲートの半分は1文字として当てる（u ありの [^…] などと同じ扱い）
+    const s = u ? String.fromCodePoint(cp) : String.fromCharCode(cp);
+    let n = 0;
+    for (const t of trees) {
+      if (!t.re.test(s)) continue;
+      n += count(t, s, 2 - n);
+      if (n >= 2) return "no";
+    }
+    if (n && work > MAX_DISJOINT_WORK) return "unverifiable";
+  }
+  return "yes";
+}
+
+// 見積もりの重さ（軽いものから確かめる順を決めるためだけに使う）。正規表現の長さと、BMP の外まで当てるか
+export function shapeCost(source, flags = "") {
+  const src = String(source ?? "");
+  return src.length * (String(flags || "").includes("u") && ASTRAL_CAPABLE.test(src) ? 17 : 1);
 }
 
 // 形の問題を探す。入れ子の繰り返し、繰り返すグループの中の選択。問題がなければ null
@@ -222,12 +279,20 @@ function shapeProblemInner(src, flags, deadline) {
       const deep = g.deep || (g.own && cand === null);
       const cands = cand === null ? g.cands : [...g.cands, cand];
       if (repeated && g.rep) return "nested";
-      if (repeated && (deep || cands.some((x) => !simpleDisjointAlternation(x, flags, { deadline })))) return "alternation";
+      if (repeated && deep) return "alternation";
+      if (repeated) {
+        for (const x of cands) {
+          const v = disjointVerdict(x, flags, { deadline });
+          if (v === "no") return "alternation";
+          if (v === "unverifiable") return "unverifiable";
+        }
+      }
       const parent = stack[stack.length - 1];
       if (g.rep || repeated) parent.rep = true;
       // 中の選択は外のグループにも残る（(?:(?:a|aa))+ も拒否する）。繰り返して確かめ終えた候補は、もう伝えない
       if (deep) parent.deep = true;
-      if (!repeated) parent.cands.push(...cands);
+      // 1つずつ足す（push(...cands) は、選択肢のとても多い正規表現で引数が多すぎて RangeError になるため）
+      if (!repeated) for (const x of cands) parent.cands.push(x);
       if (q) i += q.len;
       continue;
     }
@@ -330,6 +395,7 @@ export function checkShape(pattern, flags = "", { allowEmpty = false, deadline =
   const shape = shapeProblem(pattern, f, { deadline });
   if (shape === "pending") { const out = []; Object.defineProperty(out, "pending", { value: true }); return out; }
   if (shape === "nested") return ["繰り返しの中に繰り返しがあります（(あ+)+ のような形）。長い文で止まるおそれがあるため使えません"];
+  if (shape === "unverifiable") return [`繰り返すグループの中の選択肢が多く、互いに同じ文字に当たらないかを確かめる手間が上限（${MAX_DISJOINT_WORK / 1e8}億）を超えるため、安全と確かめられず使えません。選択肢をいくつかの文字クラス（[…]）にまとめるか、規則を分けてください`];
   if (shape === "alternation") return ["繰り返すグループの中に | があります（(?:漢|漢字?)+ のような形）。選択肢が重なると長い文で止まるおそれがあるため使えません。[漢字] のような文字クラスにするか、繰り返しの外で選んでください（選択肢がどれも1文字か文字クラス1つで、互いに同じ文字に当たらないときは使えます）"];
   let min;
   try { min = minLength(pattern); } catch (e) { return [`形を確かめられませんでした（${String(e?.message || e).slice(0, 100)}）`]; }
@@ -393,8 +459,12 @@ export function measureRegexes(items, { budgetMs } = {}) {
 }
 
 // 正規表現をまとめて確かめる。list は { source, flags } の配列。返すのは同じ並びで、問題の説明の配列か null（時間切れ）
+// 形の検査の思わぬ例外（巨大な正規表現など）は、その規則だけの拒否にする（validate と apply が止まらないため）
 export function checkRegexes(list, { budgetMs } = {}) {
-  const out = list.map((x) => checkShape(x.source, x.flags, x));
+  const out = list.map((x) => {
+    try { return checkShape(x.source, x.flags, x); }
+    catch (e) { return [`形を確かめられませんでした（${String(e?.message || e).slice(0, 100)}）`]; }
+  });
   const todo = [];
   out.forEach((p, k) => { if (!p.length) todo.push(k); });
   if (todo.length) {
@@ -409,8 +479,13 @@ export function checkRegex(pattern, flags = "") {
   return checkRegexes([{ source: pattern, flags }])[0] ?? ["時間を測れませんでした"];
 }
 
-// 検査の中身が変わったら、記録しておいた結果を使い直さないための印
-export const CHECKER_ID = createHash("sha256").update(readFileSync(SELF)).digest("hex").slice(0, 12);
+// 検査の中身が変わったら、記録しておいた結果を使い直さないための印。このファイルの中身から作り、
+// lib.mjs が読み込まれると、lib.mjs 側の判定（記録の使い方・長さ0を許すもの・辞書の規則の外し方など）の版も足す（addJudgeVersion）
+const SELF_HASH = createHash("sha256").update(readFileSync(SELF)).digest("hex");
+export let CHECKER_ID = SELF_HASH.slice(0, 12);
+export function addJudgeVersion(part) {
+  CHECKER_ID = createHash("sha256").update(SELF_HASH).update("\0").update(String(part)).digest("hex").slice(0, 12);
+}
 
 // 記録に使う鍵。検査の版・正規表現・flags（と、長さ0を許すか）から作る
 export function regexKey(source, flags = "", { allowEmpty = false } = {}) {
