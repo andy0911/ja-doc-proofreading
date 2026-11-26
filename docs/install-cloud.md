@@ -1,13 +1,12 @@
 # クラウドで使う（Claude Code on the web、claude.ai の Projects）
 
-まずどれを使うか：claude.ai/code で、校正したいリポジトリを1つだけ選んでセッションを始め、その中で次の2行を実行します（Claude に「この2行を実行して」と頼んでも、自分で打っても同じです）。手元にプラグインを入れていなくても、手元の計算機がなくても済みます。
+まずどれを使うか：claude.ai/code で、校正したいリポジトリを1つだけ選んでセッションを始め、その中で次の1行を実行します（Claude に「この1行を実行して」と頼んでも、自分で打っても同じです）。手元にプラグインを入れていなくても、手元の計算機がなくても済みます。
 
 ```bash
-curl -fsSLo /tmp/ja-proofread-setup.mjs https://raw.githubusercontent.com/andy0911/ja-doc-proofreading/main/dist/ja-proofread-setup.mjs
-node /tmp/ja-proofread-setup.mjs
+curl -fsSLo /tmp/ja-proofread-setup.mjs https://raw.githubusercontent.com/andy0911/ja-doc-proofreading/main/dist/ja-proofread-setup.mjs && node /tmp/ja-proofread-setup.mjs
 ```
 
-そのあと、表示されたコマンドでコミットしてプッシュし、新しいセッションを始めます。起動のときの依存の準備（SessionStart のフック）と書いた直後の校正は、新しいセッションから動きます。詳しくは下の方法Aです。校正したいリポジトリが公開リポジトリや社外と共有するリポジトリなら、同梱しないでください（方法Aの注意）。
+そのあと、表示されたコマンドでコミットしてプッシュし、新しいセッションを始めます。起動のときの依存の準備（SessionStart のフック）と書いた直後の校正は、新しいセッションから動きます。詳しくは下の方法Aです。同梱すると、同梱先のリポジトリに Notion の候補一覧の場所が載ります。場所を知られたくないリポジトリには同梱しないでください（方法Aの注意）。
 
 手元の Claude Code で使うなら [install-local.md](install-local.md) です。claude.ai/customize/plugins でアカウントにプラグインを足す方法は、公式の説明ではクラウドセッションにも読み込まれるとされていますが、持ち主の環境では、その画面でこのマーケットプレイスの追加ができなかったので、主な手順にはせず参考に回しています（下の B1）。
 
@@ -35,44 +34,53 @@ Projects のスレッドのうちクラウドで動くものも、リポジト�
 
 確かめたこと：クラウドのコンテナ（外向きの通信はプロキシを通る）で、空の git リポジトリに上の curl と node で一式を入れ、依存の準備（`ensure-deps.mjs`）、Write の後のフック（「必ず直す」の指摘が返る）、`claude -p` でのスキルの一覧とフックの指摘を確かめました。claude.ai/code で新しく始めたセッションそのものでスキルの一覧に出るか、フックが呼ばれるかは、まだ確かめていません。
 
-### 注意：公開リポジトリには同梱しない
+### 注意：同梱先のリポジトリに、Notion の候補一覧の場所が載る
 
-同梱すると `.claude/ja-proofread/data/settings.json` もコミットされます。この中に、台帳候補を受け付ける Notion データベースの場所が入っています。公開リポジトリや、社外の人と共有しているリポジトリには同梱しないでください。
+同梱すると `.claude/ja-proofread/data/settings.json` もコミットされ、同梱先のリポジトリに、台帳候補を受け付ける Notion データベース（候補一覧）の場所が載ります。この場所はこのプラグインの公開リポジトリにもすでに載っていて、候補一覧の中身は Notion の共有設定で守られます。それでも、同梱先のリポジトリを見る人に候補一覧の場所を知られたくないなら（公開リポジトリや、社外の人と共有しているリポジトリなど）、同梱しないでください。
 
 ### 1. 同梱する（クラウドセッションの中で）
 
-claude.ai/code で、校正したいリポジトリを1つだけ選んでセッションを始め、その中で次を実行します。Claude に「次の2行を実行して」と頼んでも、自分で打っても同じです。
+claude.ai/code で、校正したいリポジトリを1つだけ選んでセッションを始め、その中で次の1行を実行します。Claude に「次の1行を実行して」と頼んでも、自分で打っても同じです。
 
 ```bash
-curl -fsSLo /tmp/ja-proofread-setup.mjs https://raw.githubusercontent.com/andy0911/ja-doc-proofreading/main/dist/ja-proofread-setup.mjs
-node /tmp/ja-proofread-setup.mjs
+curl -fsSLo /tmp/ja-proofread-setup.mjs https://raw.githubusercontent.com/andy0911/ja-doc-proofreading/main/dist/ja-proofread-setup.mjs && node /tmp/ja-proofread-setup.mjs
 ```
 
 `node /tmp/ja-proofread-setup.mjs` は、カレントディレクトリ（セッションが始まったリポジトリの根）に同梱します。ほかの場所なら `node /tmp/ja-proofread-setup.mjs <リポジトリの根>` と指定します。git の作業コピーの根でないところでは、何も書かずに止まります。
 
-`dist/ja-proofread-setup.mjs` は依存のない Node のスクリプトで、同梱に要るファイル（`install-into-project.mjs` がコピーするものと同じ一式）を中に持っています。動かすと、中のファイルの sha256 をすべて確かめてから一時ディレクトリに書き出し、その中の `install-into-project.mjs` を動かして、一時ディレクトリを消します。入るものは下の表のとおりで、`install-into-project.mjs` で同梱したときと同じです。最後に、コミットするパスと `git add … && git commit … && git push` の例を表示します。
+`dist/ja-proofread-setup.mjs` は依存のない Node のスクリプトで、同梱に要るファイル（`install-into-project.mjs` がコピーするものと同じ一式）を中に持っています。動かすと、中のファイルの sha256 をすべて確かめてから一時ディレクトリに書き出し、その中の `install-into-project.mjs` を動かして、一時ディレクトリを消します。入るものは下の表のとおりで、`install-into-project.mjs` で同梱したときと同じです。最後に、コミットするパスと `git add … && git commit … && git push -u origin HEAD` の例を表示します。`git push -u origin HEAD` なので、上流を決めていない作業用のブランチ（クラウドセッションの `claude/…` など）でも、そのままプッシュできます。
 
 ダウンロードに curl を使うのは、クラウドの外向きの通信がプロキシを通り、Node の `fetch` は既定ではプロキシ（`HTTPS_PROXY`）を使わないためです。
 
 #### 版を固定する
 
-`main` の URL は、いちばん新しい版を指します。版を固定したいときは、`main` の代わりにその版のコミットの SHA を入れ、ファイルの sha256 を確かめてから動かします。各版の sha256 は、[CHANGELOG.md](../CHANGELOG.md) の各版の項に書いています（0.1.8 から）。
+`main` の URL は、いちばん新しい版を指します。版を固定したいときは、`main` の代わりにその版のコミットの SHA を入れ、ファイルの sha256 を確かめてから動かします。
+
+使うコミットの SHA は、GitHub の [dist/ja-proofread-setup.mjs の履歴](https://github.com/andy0911/ja-doc-proofreading/commits/main/dist/ja-proofread-setup.mjs) で探します。各版のコミットのメッセージは版の番号（`0.1.9：…` など）で始まるので、使いたい版のコミットを選び、その SHA（40文字。コピーのボタンで写せます）を下の `<コミットのSHA>` に入れます。タグは使いません。その版の sha256 は、[CHANGELOG.md](../CHANGELOG.md) のその版の項に書いています（0.1.8 から）。
 
 ```bash
-curl -fsSLo /tmp/ja-proofread-setup.mjs https://raw.githubusercontent.com/andy0911/ja-doc-proofreading/<コミットのSHA>/dist/ja-proofread-setup.mjs
-echo "<CHANGELOG に書いた sha256>  /tmp/ja-proofread-setup.mjs" | sha256sum -c -
-node /tmp/ja-proofread-setup.mjs
+curl -fsSLo /tmp/ja-proofread-setup.mjs https://raw.githubusercontent.com/andy0911/ja-doc-proofreading/<コミットのSHA>/dist/ja-proofread-setup.mjs && echo "<CHANGELOG に書いた sha256>  /tmp/ja-proofread-setup.mjs" | sha256sum -c - && node /tmp/ja-proofread-setup.mjs
 ```
 
-`sha256sum -c` が `OK` と出たときだけ、3行目を実行します。macOS では、`sha256sum -c -` の代わりに `shasum -a 256 -c -` を使います。`node /tmp/ja-proofread-setup.mjs --version` で中の版を、`--list` で中のファイルとその sha256 を確かめられます。
+`sha256sum -c` が `OK` を出したときだけ node まで進み、合わなければそこで止まります。`node /tmp/ja-proofread-setup.mjs --version` で中の版を、`--list` で中のファイルとその sha256 を確かめられます。
+
+一式の中に持っている各ファイルの sha256 で防げるのは、取る途中で壊れたり途切れたりしたファイルだけです。ファイルごと書き換えられたときは、中の sha256 も一緒に書き換えられるので防げません。書き換えに備えるのは、版の固定（コミットの SHA を入れた URL）と、外の sha256（CHANGELOG のものを前もって控えておく）との照らし合わせです。
 
 #### 手元の Claude Code から同梱する
 
-同じファイルで、手元の端末からも同梱できます。手元にプラグインを入れていなくても構いません。
+同じファイルで、手元の端末からも同梱できます。手元にプラグインを入れていなくても構いません。手元（macOS など）の `/tmp` はほかのユーザーやプログラムと共有していることがあるので、`mktemp -d` で作った自分だけの場所に落とします。
 
 ```bash
-curl -fsSLo /tmp/ja-proofread-setup.mjs https://raw.githubusercontent.com/andy0911/ja-doc-proofreading/main/dist/ja-proofread-setup.mjs
-node /tmp/ja-proofread-setup.mjs <対象のリポジトリ>
+f="$(mktemp -d)/ja-proofread-setup.mjs" && curl -fsSLo "$f" https://raw.githubusercontent.com/andy0911/ja-doc-proofreading/main/dist/ja-proofread-setup.mjs && node "$f" <対象のリポジトリ>
+```
+
+版を固定するときは、次のようにします（`<コミットのSHA>` と sha256 の探し方は上の「版を固定する」と同じです）。
+
+```bash
+# Linux
+f="$(mktemp -d)/ja-proofread-setup.mjs" && curl -fsSLo "$f" https://raw.githubusercontent.com/andy0911/ja-doc-proofreading/<コミットのSHA>/dist/ja-proofread-setup.mjs && echo "<CHANGELOG に書いた sha256>  $f" | sha256sum -c - && node "$f" <対象のリポジトリ>
+# macOS
+f="$(mktemp -d)/ja-proofread-setup.mjs" && curl -fsSLo "$f" https://raw.githubusercontent.com/andy0911/ja-doc-proofreading/<コミットのSHA>/dist/ja-proofread-setup.mjs && echo "<CHANGELOG に書いた sha256>  $f" | shasum -a 256 -c - && node "$f" <対象のリポジトリ>
 ```
 
 手元にプラグインを入れていれば（[install-local.md](install-local.md)）、これまでどおり、手元のマーケットプレイスの写しのスクリプトでも同じものが入ります。
@@ -104,11 +112,10 @@ node ~/.claude/plugins/marketplaces/ja-doc-proofreading/plugins/ja-proofread/scr
 同梱したものだけを足します。1. の最後に表示されるコマンドと同じです（クラウドセッションの中なら、Claude に「表示されたコマンドでコミットしてプッシュして」と頼めます）。`.claude/settings.json.bak`（できたとき）や、ほかの `.claude/` の中身はコミットしません。下はこの版で同梱したものの名前です（`ja-proofread-*` と書くと、自分で置いた `ja-proofread-mine` のようなスキルまで入るため、名前で書きます）。
 
 ```bash
-cd <対象のリポジトリ>
-git add .claude/ja-proofread .claude/skills/ja-proofread-grow-ledger .claude/skills/ja-proofread-proofread .claude/skills/ja-proofread-write .claude/agents/ja-proofread-fresh-eyes-reader.md .claude/agents/ja-proofread-structure-reviewer.md .claude/settings.json .ja-proofread.json
-git commit -m "ja-proofread を同梱"
-git push
+cd <対象のリポジトリ> && git add .claude/ja-proofread .claude/skills/ja-proofread-grow-ledger .claude/skills/ja-proofread-proofread .claude/skills/ja-proofread-write .claude/agents/ja-proofread-fresh-eyes-reader.md .claude/agents/ja-proofread-structure-reviewer.md .claude/settings.json .ja-proofread.json && git commit -m "ja-proofread を同梱" && git push -u origin HEAD
 ```
+
+`git push -u origin HEAD` は、今のブランチを同じ名前で origin にプッシュし、上流に決めます。上流のない作業用のブランチでも、そのまま通ります。
 
 ### 3. 新しいセッションを始める
 
@@ -121,7 +128,7 @@ Projects のクラウドで動くスレッドで使うときは、同梱した�
 
 ### 新しい版にする
 
-クラウドセッションの中でも手元でも、1. の2行をもう一度実行します（`main` の URL なら、いちばん新しい版が入ります）。同梱した部品は新しい版に入れ替わり、フックは重複しません。そのあと 2. でコミットしてプッシュし、新しいセッションを始めます。
+クラウドセッションの中でも手元でも、1. の1行（手元なら「手元の Claude Code から同梱する」の1行）をもう一度実行します（`main` の URL なら、いちばん新しい版が入ります）。同梱した部品は新しい版に入れ替わり、フックは重複しません。そのあと 2. でコミットしてプッシュし、新しいセッションを始めます。
 
 手元のマーケットプレイスの写しや、クローンした作業コピーの `install-into-project.mjs` を使うときは、先にそれを最新にします。古いままの場所から同梱し直すと、古い版が入ります。
 
@@ -136,26 +143,25 @@ git -C ja-doc-proofreading pull
 
 ### やめる
 
-1. と同じファイルに `--remove` をつけて、リポジトリの根で動かします（クラウドセッションの中でも動きます）。最後に、ステージするパスと `git add -A -- … && git commit … && git push` の例を表示します。
+1. と同じファイルに `--remove` をつけて、リポジトリの根で動かします（クラウドセッションの中でも動きます）。最後に、ステージするパスと `git add -A -- … && git commit … && git push -u origin HEAD` の例を表示します。同梱が無かったときは、何も変えず、パスと例も出さずに終わります。
 
 ```bash
-curl -fsSLo /tmp/ja-proofread-setup.mjs https://raw.githubusercontent.com/andy0911/ja-doc-proofreading/main/dist/ja-proofread-setup.mjs
-node /tmp/ja-proofread-setup.mjs --remove
+curl -fsSLo /tmp/ja-proofread-setup.mjs https://raw.githubusercontent.com/andy0911/ja-doc-proofreading/main/dist/ja-proofread-setup.mjs && node /tmp/ja-proofread-setup.mjs --remove
 ```
+
+手元では、`mktemp -d` の形（「手元の Claude Code から同梱する」の1行）の最後の `<対象のリポジトリ>` のあとに `--remove` をつけます。
 
 手元のプラグインの写しからなら `node ~/.claude/plugins/marketplaces/ja-doc-proofreading/plugins/ja-proofread/scripts/install-into-project.mjs <対象のリポジトリ> --remove`、クローンした作業コピーからなら `ja-doc-proofreading/plugins/ja-proofread/scripts/install-into-project.mjs` に読み替えます。
 
 フックと、同梱したときに入れた部品だけが消えます。何を入れたかは同梱のときに `.claude/ja-proofread/vendored.json` に記録しているので、あとから自分で足した `ja-proofread-` で始まるスキルなどは残ります。同梱のときに `.claude/settings.json` や `.claude/skills/` などを新しく作っていたなら、空になったものも消します。一度も同梱していないリポジトリで実行したときは、何も変えずに終わります。
 
-`.ja-proofread.json` は残すので、要らなければ消します。消えたことをリポジトリにも反映するため、コミットしてプッシュします。`.ja-proofread.json` も消すときは、`git rm` の行も実行します。ステージするのは同梱したものの名前だけにします（`ja-proofread-*` のような書き方にすると、自分で置いた `ja-proofread-mine` のようなスキルの変更まで一緒に入るため）。同梱したものの一覧は、やめる前の `.claude/ja-proofread/vendored.json` にあります。下はこの版の一覧です。
+`.ja-proofread.json` は残すので、要らなければ消します。消えたことをリポジトリにも反映するため、コミットしてプッシュします。ステージするのは同梱したものの名前だけにします（`ja-proofread-*` のような書き方にすると、自分で置いた `ja-proofread-mine` のようなスキルの変更まで一緒に入るため）。同梱したものの一覧は、やめる前の `.claude/ja-proofread/vendored.json` にあります。下はこの版の一覧で、表示される例と同じ並びです（表示では、コミットしていたものだけに絞られます）。
 
 ```bash
-cd <対象のリポジトリ>
-git add -A -- .claude/ja-proofread .claude/skills/ja-proofread-write .claude/skills/ja-proofread-proofread .claude/skills/ja-proofread-grow-ledger .claude/agents/ja-proofread-structure-reviewer.md .claude/agents/ja-proofread-fresh-eyes-reader.md .claude/settings.json
-git rm .ja-proofread.json   # .ja-proofread.json も消すときだけ
-git commit -m "ja-proofread の同梱をやめる"
-git push
+cd <対象のリポジトリ> && git add -A -- .claude/ja-proofread .claude/skills/ja-proofread-grow-ledger .claude/skills/ja-proofread-proofread .claude/skills/ja-proofread-write .claude/agents/ja-proofread-fresh-eyes-reader.md .claude/agents/ja-proofread-structure-reviewer.md .claude/settings.json && git commit -m "ja-proofread の同梱をやめる" && git push -u origin HEAD
 ```
+
+`.ja-proofread.json` も消すときは、先に `git rm .ja-proofread.json` を実行してから、上の行を実行します。
 
 ### 注意：プラグインと同梱を両方使うと、記録が分かれる
 
@@ -215,7 +221,7 @@ claude.ai のアカウントで有効にしたスキルは、クラウドセッ�
 | 1. の curl が 403 になる・つながらない（`curl: (22) … 403`、`Could not resolve host`、`CONNECT tunnel failed` など） | 環境のネットワーク（Network access）が「None」になっていないか。「Limited」なら、許可リストに raw.githubusercontent.com が入っているか（既定の許可リストには入っています。Allowed domains を自分で決めているなら足します）。URL のつづりと、`main` かコミットの SHA かを確かめる。`github.com/…/archive/`・`codeload.github.com`・GitHub の API からは、セッションに付いていないリポジトリだと公開でも 403 になるので、raw.githubusercontent.com の URL を使う |
 | 同梱してプッシュしたのに、書いた直後の校正が動かない | 同梱したそのセッションでは、SessionStart のフックが動いておらず、フックも読み込まれていないことがあります。新しいセッションを始めます。プッシュした先が作業用のブランチなら、既定のブランチにマージしてから始めるか、そのブランチで始めます |
 | 「git の作業コピーの根ではありません」「git の作業コピーではありません」と出る | 表示された根に `cd` するか、`node /tmp/ja-proofread-setup.mjs <リポジトリの根>` と根を指定する。何も書かずに止まっています |
-| 「sha256 が合わない」と出る | ダウンロードしたファイルが壊れています。何も書かずに止まっているので、curl で取り直す |
+| 「sha256 が合わない」と出る | ダウンロードしたファイルが壊れています。何も書かずに止まっているので、curl で取り直す。版を固定したときに `sha256sum -c` が `FAILED` を出したなら、SHA と sha256 の組み合わせ（同じ版のものか）を確かめる |
 | スキルが一覧に出ない | `.claude/skills/ja-proofread-*` をコミットしたか。プッシュ前のブランチでセッションを始めていないか。リポジトリを複数選んだセッションでは、起動のときには一覧に出ず、そのリポジトリのファイルを Claude に読ませるか編集させたあとで出ると読めます（未確認）。Projects のクラウドのスレッドでは、2026年10月1日より前に始めたスレッドや、名前がドットで始まるリポジトリを含むスレッドなどでは出ないので、新しいスレッドを始めるか、B4 のように自分のコンピューターで動かします。セルフホスト（self-hosted）の環境では、リポジトリのスキル・サブエージェント・コマンドを読まないことがあるので、ランナーのイメージに入れます |
 | 書いた直後の校正が動かない | リポジトリを1つだけ選んで始めたか。`.ja-proofread.json` がリポジトリの直下にあるか。Projects のクラウドのスレッドではフックが動かないので、スキルで校正します |
 | 「textlint の依存がまだ入っていません」と出る | 環境のネットワークが Limited で「Allow package managers」に印が付いているか（印を外したなら Allowed domains に registry.npmjs.org があるか、Full か）。セルフホストの環境なら、ランナーから registry.npmjs.org に届くか。`node .claude/ja-proofread/scripts/ensure-deps.mjs` を実行して npm のエラーを見る |

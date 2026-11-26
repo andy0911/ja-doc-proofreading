@@ -921,7 +921,8 @@ ok("同梱したスキルに、プラグインのデータ置き場の説明が�
   const cmds = Object.values(sst.hooks || {}).flatMap((gs) => gs.flatMap((g) => g.hooks.map((h) => h.command)));
   ok("フックのコマンドは $CLAUDE_PROJECT_DIR/.claude/ja-proofread/scripts/ を指す", cmds.length === 2 && cmds.every((c) => c.includes('"$CLAUDE_PROJECT_DIR/.claude/ja-proofread/scripts/')), cmds.join(" | "));
   const addLine = r.stdout.split("\n").find((l) => l.includes("git add ")) || "";
-  ok("最後に、同梱したものの名前だけのコミットするパスと git add … && git commit … && git push の例を出す", /コミットするパス：\.claude\/ja-proofread \.claude\/skills\/ja-proofread-grow-ledger /.test(r.stdout) && /git add \.claude\/ja-proofread .*\.ja-proofread\.json && git commit -m "ja-proofread v[\d.]+ を同梱" && git push/.test(addLine) && !addLine.includes("ja-proofread-*") && (r.stdout.match(/コミットするパス：/g) || []).length === 1 && /新しいセッションを始めて/.test(r.stdout), r.stdout);
+  ok("最後に、同梱したものの名前だけのコミットするパスと git add … && git commit … && git push -u origin HEAD の例を出す", /コミットするパス：\.claude\/ja-proofread \.claude\/skills\/ja-proofread-grow-ledger /.test(r.stdout) && /git add \.claude\/ja-proofread .*\.ja-proofread\.json && git commit -m "ja-proofread を同梱" && git push -u origin HEAD$/.test(addLine) && !addLine.includes("ja-proofread-*") && (r.stdout.match(/コミットするパス：/g) || []).length === 1 && /新しいセッションを始めて/.test(r.stdout), r.stdout);
+  ok("同梱に build-setup.mjs は入らない（一式にも install-into-project の同梱にも）", !existsSync(join(viaSetup, ".claude/ja-proofread/scripts/build-setup.mjs")) && !existsSync(join(viaInstall, ".claude/ja-proofread/scripts/build-setup.mjs")) && existsSync(join(viaSetup, ".claude/ja-proofread/scripts/install-into-project.mjs")) && !run([DIST, "--list"]).stdout.includes("build-setup.mjs"));
   write(viaSetup, "doc.md", readFileSync(join(ROOT, "tests/fixtures/ai-like.md"), "utf8"));
   const hr = run([join(viaSetup, ".claude/ja-proofread/scripts/hook-post-edit.mjs")], { input: JSON.stringify({ tool_name: "Write", tool_input: { file_path: join(viaSetup, "doc.md") }, cwd: viaSetup }), env: { CLAUDE_PROJECT_DIR: viaSetup } });
   ok("一式で同梱したフックが動き、必ず直す指摘を返す", /"decision":"block"/.test(hr.stdout) && /必ず直す [1-9]/.test(hr.stdout), hr.stdout.slice(0, 200) + hr.stderr);
@@ -944,6 +945,44 @@ ok("同梱したスキルに、プラグインのデータ置き場の説明が�
   spawnSync("git", ["-c", "user.email=t@example.invalid", "-c", "user.name=t", "commit", "-qm", "vendor"], { cwd: viaSetup });
   r = run([DIST, viaSetup, "--remove"]);
   ok("--remove で同梱をやめ、.ja-proofread.json は残し、git add -A の例を出す", r.status === 0 && !existsSync(join(viaSetup, ".claude")) && existsSync(join(viaSetup, ".ja-proofread.json")) && /git add -A -- \.claude\/ja-proofread /.test(r.stdout), r.stdout + r.stderr);
+  // 同梱が無いリポジトリで --remove：何も変えず、コミットするパスと例を出さない（自分の .claude/settings.json があっても）
+  const noVend = gitInit(tmp("jp-setupnov-"));
+  write(noVend, ".claude/settings.json", JSON.stringify({ permissions: { allow: ["Bash(ls)"] } }) + "\n");
+  spawnSync("git", ["add", "-A"], { cwd: noVend });
+  r = run([DIST, noVend, "--remove"]);
+  ok("同梱が無いときの --remove は、何も変えず、コミットするパスと例を出さずに終える", r.status === 0 && /同梱されていません/.test(r.stdout) && !/コミットするパス|git add|git push/.test(r.stdout) && json(readFileSync(join(noVend, ".claude/settings.json"), "utf8")).permissions?.allow?.[0] === "Bash(ls)", r.stdout + r.stderr);
+  // 表示した例は、上流のない作業用ブランチでもそのまま通る（git push -u origin HEAD）
+  const bare = tmp("jp-setupbare-");
+  spawnSync("git", ["init", "-q", "--bare", bare]);
+  const clone = join(tmp("jp-setupclone-"), "w");
+  spawnSync("git", ["clone", "-q", bare, clone]);
+  const gitEnv = { GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@example.invalid", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@example.invalid" };
+  const gitIn = (args, cwd = clone) => spawnSync("git", args, { cwd, encoding: "utf8", env: { ...BASE_ENV, ...gitEnv } });
+  write(clone, "README.md", "# x\n");
+  gitIn(["add", "-A"]); gitIn(["commit", "-qm", "init"]); gitIn(["push", "-q", "origin", "HEAD"]);
+  gitIn(["checkout", "-q", "-b", "claude/work"]);
+  r = run([DIST], { cwd: clone });
+  const pushLine = (out) => (out.split("\n").find((l) => /^ {2}cd .* && git add /.test(l)) || "").trim();
+  let pr = spawnSync("bash", ["-c", pushLine(r.stdout)], { encoding: "utf8", env: { ...BASE_ENV, ...gitEnv } });
+  const remoteFiles = () => gitIn(["ls-tree", "-r", "--name-only", "claude/work"], bare).stdout;
+  ok("表示した git add … && git push -u origin HEAD の例が、上流のない作業用ブランチで通る", r.status === 0 && pr.status === 0 && remoteFiles().includes(".claude/ja-proofread/scripts/install-into-project.mjs") && remoteFiles().includes(".ja-proofread.json") && gitIn(["rev-parse", "--abbrev-ref", "claude/work@{upstream}"]).stdout.trim() === "origin/claude/work", pushLine(r.stdout) + pr.stdout + pr.stderr);
+  r = run([DIST, "--remove"], { cwd: clone });
+  pr = spawnSync("bash", ["-c", pushLine(r.stdout)], { encoding: "utf8", env: { ...BASE_ENV, ...gitEnv } });
+  ok("--remove で表示した例も通り、リモートの作業用ブランチから同梱が消える", r.status === 0 && pr.status === 0 && !remoteFiles().includes(".claude/") && remoteFiles().includes(".ja-proofread.json"), pushLine(r.stdout) + pr.stdout + pr.stderr + remoteFiles());
+  // build-setup.mjs は git が追跡しているファイルだけを入れ、git の外では止める
+  const bRepo = tmp("jp-buildrepo-");
+  cpSync(ROOT, join(bRepo, "plugins/ja-proofread"), { recursive: true, filter: (p) => !p.includes("node_modules") });
+  spawnSync("git", ["init", "-q"], { cwd: bRepo });
+  spawnSync("git", ["add", "-A"], { cwd: bRepo });
+  write(bRepo, "plugins/ja-proofread/templates/untracked-memo.md", "追跡していないメモ\n");
+  write(bRepo, "plugins/ja-proofread/scripts/untracked.mjs", "// 追跡していない\n");
+  r = run([join(bRepo, "plugins/ja-proofread/scripts/build-setup.mjs"), "--out", join(bRepo, "out/s.mjs")]);
+  const bList = run([join(bRepo, "out/s.mjs"), "--list"]).stdout;
+  ok("build-setup.mjs は git が追跡していないファイルを入れない", r.status === 0 && bList.includes("scripts/install-into-project.mjs") && !bList.includes("untracked") && !bList.includes("build-setup.mjs"), r.stderr + bList.slice(0, 300));
+  const nRepo = tmp("jp-buildnogit-");
+  cpSync(ROOT, join(nRepo, "plugins/ja-proofread"), { recursive: true, filter: (p) => !p.includes("node_modules") });
+  r = run([join(nRepo, "plugins/ja-proofread/scripts/build-setup.mjs"), "--out", join(nRepo, "out/s.mjs")], { env: { GIT_CEILING_DIRECTORIES: nRepo } });
+  ok("build-setup.mjs は git の外では止め、何も書かない", r.status === 1 && /git ls-files/.test(r.stderr) && !existsSync(join(nRepo, "out")), r.stderr);
   r = run([DIST, "--version"]);
   ok("一式の版は plugin.json と同じ", r.stdout.trim() === json(readFileSync(join(ROOT, ".claude-plugin/plugin.json"), "utf8")).version, r.stdout);
 }

@@ -1,5 +1,14 @@
 # 変更履歴
 
+## 0.1.9（2026-11-26）
+- 同梱の一式 `dist/ja-proofread-setup.mjs` の sha256：`b47eb9104ee3b725258accda59c34e204d106e0330c07e40f6c5c1191840dfcd`
+- 独立レビューの指摘を直した。台帳の型は変えていない（台帳の版は plugin.json とそろえて 0.1.9 にした）。
+- `dist/ja-proofread-setup.mjs`：表示するプッシュの例を `git push -u origin HEAD` にした（上流のない作業用のブランチ、たとえばクラウドセッションの `claude/…` でも、そのまま通る）。コミットのメッセージは版の番号を入れない「ja-proofread を同梱」にして、手順書と同じにした。
+- `dist/ja-proofread-setup.mjs`：`--remove` で同梱が無かったとき（`vendored.json` も `.claude/ja-proofread/` も同梱のフックも無い）は、コミットするパスと例を出さずに終える。これまでは、自分の `.claude/settings.json` があると、それをステージする例を出していた。
+- `install-into-project.mjs`：同梱に `scripts/build-setup.mjs` を入れない（同梱先では使わない）。一式にも入れない。同梱の最後の注意を、同梱先のリポジトリに Notion の候補一覧の場所が載ること（中身は Notion の共有設定で守られる。場所を知られたくないなら同梱しない）に直した。
+- `build-setup.mjs`：入れるファイルを `git ls-files` で決める（追跡していないファイルは入れない）。git の外で動かしたときは止める。
+- 文書：README・install-cloud・grow-ledger の手順を、`curl … && node …` の1行にした。版を固定する手順も `curl … && echo "<sha256>  …" | sha256sum -c - && node …` の1行にし（macOS は `shasum -a 256 -c -`）、使うコミットの SHA を `dist/ja-proofread-setup.mjs` の履歴（GitHub の commits の画面）で探す方法を書いた（タグは使わない）。手元向けは `mktemp -d` で作った場所に落とす形にした。一式の中の sha256 で防げるのは壊れたファイルで、書き換えに備えるのは版の固定と外の sha256 の確認だと書いた。「公開リポジトリには同梱しない」の注意を、Notion の候補一覧の場所が同梱先に載ることを理由に書き直した（場所はこのプラグインの公開リポジトリにもすでに載っている）。install-cloud のコミットのメッセージと「やめる」のパスの並びを、表示と同じにした。
+
 ## 0.1.8（2026-11-26）
 - 同梱の一式 `dist/ja-proofread-setup.mjs` の sha256：`f20ebcd204b08b5562b94ec44ca5334c325c44b7268f3a7e0081778c7412e8df`
 - 1ファイルで入る同梱の一式 `dist/ja-proofread-setup.mjs` を足した。claude.ai/code のクラウドセッションには手元のプラグインの写し（`~/.claude/plugins/marketplaces/...`）がなく、GitHub のプロキシがセッションに付いていないリポジトリのクローンや archive を通さないため、これまでの `install-into-project.mjs` ではセッションの中だけで同梱できなかった。新しい一式は依存のない Node のスクリプトで、同梱に要るファイル（`install-into-project.mjs` がコピーするものと、その元になるスキル・サブエージェント）を base64 で中に持つ。動かすと、各ファイルの sha256 をすべて確かめてから一時ディレクトリに書き出し、その中の `install-into-project.mjs` を動かす（結果は `install-into-project.mjs` で同梱したときと同じ。`--remove` も使える）。対象は引数のリポジトリ、省略時はカレントディレクトリで、git の作業コピーの根でなければ何も書かずに止まる。最後に、同梱したものの名前だけのコミットするパスと `git add … && git commit … && git push` の例を表示する。セッションの中で `curl -fsSLo /tmp/ja-proofread-setup.mjs https://raw.githubusercontent.com/andy0911/ja-doc-proofreading/main/dist/ja-proofread-setup.mjs` と `node /tmp/ja-proofread-setup.mjs` を実行すれば済む。

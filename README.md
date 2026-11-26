@@ -25,11 +25,10 @@ claude plugin install ja-proofread@ja-doc-proofreading --scope user
 - 手元の Claude Code：[docs/install-local.md](docs/install-local.md)
 - クラウドセッション：[docs/install-cloud.md](docs/install-cloud.md)
 
-クラウドセッション（claude.ai/code）には、上のコマンドで入れたプラグインは持ち込まれません。校正したいリポジトリを1つだけ選んでセッションを始め、その中で次の2行を実行し（Claude に頼んでもよい）、表示されたコマンドでコミットしてプッシュしてから、新しいセッションを始めます。手元にプラグインを入れていなくても済みます。版の固定や sha256 の確かめ方、手元からの同梱、やめ方は [docs/install-cloud.md](docs/install-cloud.md) の方法Aです。校正したいリポジトリが公開・社外共有なら同梱しないでください（Notion の場所も入るため）。
+クラウドセッション（claude.ai/code）には、上のコマンドで入れたプラグインは持ち込まれません。校正したいリポジトリを1つだけ選んでセッションを始め、その中で次の1行を実行し（Claude に頼んでもよい）、表示されたコマンド（`git add … && git commit … && git push -u origin HEAD`）でコミットしてプッシュしてから、新しいセッションを始めます。手元にプラグインを入れていなくても済みます。版の固定や sha256 の確かめ方、手元からの同梱、やめ方は [docs/install-cloud.md](docs/install-cloud.md) の方法Aです。同梱すると、同梱先のリポジトリに Notion の候補一覧の場所が載ります。候補一覧の中身は Notion の共有設定で守られますが、場所を知られたくないリポジトリ（公開・社外共有など）には同梱しないでください。
 
 ```bash
-curl -fsSLo /tmp/ja-proofread-setup.mjs https://raw.githubusercontent.com/andy0911/ja-doc-proofreading/main/dist/ja-proofread-setup.mjs
-node /tmp/ja-proofread-setup.mjs
+curl -fsSLo /tmp/ja-proofread-setup.mjs https://raw.githubusercontent.com/andy0911/ja-doc-proofreading/main/dist/ja-proofread-setup.mjs && node /tmp/ja-proofread-setup.mjs
 ```
 
 claude.ai/customize/plugins でアカウントにマーケットプレイスを足す方法は、持ち主の環境では追加ができなかったので、参考として [docs/install-cloud.md](docs/install-cloud.md) の B1 に回しています。

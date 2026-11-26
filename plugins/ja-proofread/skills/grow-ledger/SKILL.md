@@ -143,11 +143,16 @@ claude plugin marketplace update ja-doc-proofreading
 claude plugin update ja-proofread@ja-doc-proofreading
 ```
 
-- プロジェクトに同梱している場合（クラウドセッション向け）は、1ファイルで入る同梱の一式を取り直し、プロジェクトの根で動かして、同梱した版を入れ替えます。手元のプラグインは要らず、クラウドセッションの中でも動きます。終わったらコミットしてプッシュし、新しいセッションを始めます。同梱した版のスクリプト（`.claude/ja-proofread/scripts/`）からは同梱し直せません。
+- プロジェクトに同梱している場合（クラウドセッション向け）は、1ファイルで入る同梱の一式を取り直し、プロジェクトの根で動かして、同梱した版を入れ替えます。手元のプラグインは要らず、クラウドセッションの中でも動きます。終わったら、表示されたコマンド（`git add … && git commit … && git push -u origin HEAD`）でコミットしてプッシュし、新しいセッションを始めます。同梱した版のスクリプト（`.claude/ja-proofread/scripts/`）からは同梱し直せません。
 
 ```bash
-curl -fsSLo /tmp/ja-proofread-setup.mjs https://raw.githubusercontent.com/andy0911/ja-doc-proofreading/main/dist/ja-proofread-setup.mjs
-node /tmp/ja-proofread-setup.mjs <プロジェクト>
+curl -fsSLo /tmp/ja-proofread-setup.mjs https://raw.githubusercontent.com/andy0911/ja-doc-proofreading/main/dist/ja-proofread-setup.mjs && node /tmp/ja-proofread-setup.mjs <プロジェクト>
+```
+
+  手元（macOS など、`/tmp` をほかと共有している環境）では、`mktemp -d` で作った場所に落とします。
+
+```bash
+f="$(mktemp -d)/ja-proofread-setup.mjs" && curl -fsSLo "$f" https://raw.githubusercontent.com/andy0911/ja-doc-proofreading/main/dist/ja-proofread-setup.mjs && node "$f" <プロジェクト>
 ```
 
   マーケットプレイスの作業コピーがあるときは、`git pull` のあと `node <マーケットプレイスの作業コピー>/plugins/ja-proofread/scripts/install-into-project.mjs <プロジェクト>` でも同じです。

@@ -8,7 +8,8 @@
 //   node build-setup.mjs --check    作り直したものが dist のファイルとバイト単位で同じか、CHANGELOG の今の版の項に
 //                                   その sha256 があるかを確かめる（CI とテストが使う。古いまま出荷しないため）
 //   node build-setup.mjs --out <パス> ほかの場所に書く（CHANGELOG は変えない）
-import { readFileSync, writeFileSync, readdirSync, lstatSync, existsSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, lstatSync, existsSync, mkdirSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
@@ -18,28 +19,25 @@ const REPO = resolve(ROOT, "..", "..");
 export const DIST = join(REPO, "dist", "ja-proofread-setup.mjs");
 const CHANGELOG = join(REPO, "CHANGELOG.md");
 
-// install-into-project.mjs が読むもの・コピーするもの。tests と hooks は同梱しないので入れない
+// install-into-project.mjs が読むもの・コピーするもの。tests と hooks は同梱しないので入れない。
+// build-setup.mjs 自身も、同梱先では使わないので入れない（install-into-project.mjs もコピーしない）
 const DIRS = [".claude-plugin", "agents", "config", "data", "rules", "scripts", "skills", "templates"];
 const TOP_FILES = ["package.json", "package-lock.json"];
-// .gitignore で除いているもの（手元にあっても CI のチェックアウトには無いので、入れると作り直したものが合わなくなる）
-const skip = (name) => name === "node_modules" || name === ".DS_Store" || name === "approved.json" || name === "baseline.json" || name.endsWith(".baseline.json") || /\.tmp-\d+$/.test(name);
+const SELF = "scripts/build-setup.mjs";
 
 const sha256 = (buf) => createHash("sha256").update(buf).digest("hex");
 
-function collect() {
-  const out = [];
-  const walk = (rel) => {
-    for (const name of readdirSync(join(ROOT, rel)).sort()) {
-      if (skip(name)) continue;
-      const r = `${rel}/${name}`;
-      const st = lstatSync(join(ROOT, r));
-      if (st.isDirectory()) walk(r);
-      else if (st.isFile()) out.push(r);
-    }
-  };
-  for (const d of DIRS) walk(d);
-  for (const f of TOP_FILES) if (existsSync(join(ROOT, f))) out.push(f);
-  return out.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
+// 入れるファイルは git が追跡しているもの（git ls-files）で決める。手元にだけある追跡していないファイル
+// （approved.json の写しや作業中のメモなど）は、CI のチェックアウトには無く、入れると作り直したものが合わなくなるため。
+// git の外で動かしたとき（git が無い、作業コピーでない、ファイルを追跡していない）は止める
+export function collect() {
+  const r = spawnSync("git", ["ls-files", "-z", "--", ...DIRS, ...TOP_FILES], { cwd: ROOT, encoding: "utf8" });
+  if (r.error || r.status !== 0) throw new Error(`git ls-files でファイルを決められないので止めました。このリポジトリの git の作業コピーの中で動かしてください（${r.error ? r.error.message : (r.stderr || "").trim()}）`);
+  const files = r.stdout.split("\0").filter((p) => p && p !== SELF);
+  if (!files.some((p) => p === "scripts/install-into-project.mjs")) throw new Error("git が追跡しているファイルに scripts/install-into-project.mjs がないので止めました。このリポジトリの git の作業コピーの中で動かしてください");
+  const bad = files.filter((p) => { try { return !lstatSync(join(ROOT, p)).isFile(); } catch { return true; } });
+  if (bad.length) throw new Error(`git が追跡しているのに、ふつうのファイルとして読めないものがあります：${bad.join(" ")}`);
+  return files.sort((a, b) => (a < b ? -1 : a > b ? 1 : 0));
 }
 
 export function buildSetup() {
@@ -136,6 +134,15 @@ for (const [p, sha, b64] of FILES) {
 const readManifest = () => { try { return JSON.parse(readFileSync(join(target, ".claude", "ja-proofread", "vendored.json"), "utf8")); } catch { return null; } };
 const names = (v, re) => (Array.isArray(v) ? v.filter((x) => typeof x === "string" && re.test(x)) : []);
 const before = readManifest();
+// 同梱があるか（install-into-project.mjs と同じ見方：.claude/ja-proofread/ があるか、settings.json に同梱のフックがあるか）。
+// やめるときに同梱が無ければ、install-into-project.mjs が「同梱されていません」と出して何も変えないので、コミットの例も出さない
+const hasOurHooks = () => {
+  try {
+    const st = JSON.parse(readFileSync(join(target, ".claude", "settings.json"), "utf8"));
+    return Object.values(st?.hooks || {}).some((gs) => Array.isArray(gs) && gs.some((g) => (g?.hooks || []).some((h) => String(h?.command || "").includes(".claude/ja-proofread/scripts/"))));
+  } catch { return false; }
+};
+const vendoredBefore = before !== null || existsSync(join(target, ".claude", "ja-proofread")) || hasOurHooks();
 
 const work = mkdtempSync(join(tmpdir(), "ja-proofread-setup-"));
 let status = 1;
@@ -154,6 +161,7 @@ try {
   rmSync(work, { recursive: true, force: true });
 }
 if (status !== 0) process.exit(status);
+if (remove && !vendoredBefore) process.exit(0);
 
 const q = (s) => (/^[A-Za-z0-9_\/.:@%+=,-]+$/.test(s) ? s : "'" + s.replace(/'/g, "'\\''") + "'");
 const manifest = remove ? before : readManifest();
@@ -164,13 +172,13 @@ if (remove) {
   // 消えたもののうち、コミットしていたものだけをステージする（無いパスを git add に渡すと失敗するため）
   paths = paths.filter((p) => existsSync(join(target, p)) || git(["ls-files", "--", p]).stdout.trim());
   console.log("\nコミットするパス：" + (paths.join(" ") || "（なし）"));
-  if (paths.length) console.log("コミットしてプッシュする例：\n  cd " + q(target) + " && git add -A -- " + paths.join(" ") + ' && git commit -m "ja-proofread の同梱をやめる" && git push');
+  if (paths.length) console.log("コミットしてプッシュする例：\n  cd " + q(target) + " && git add -A -- " + paths.join(" ") + ' && git commit -m "ja-proofread の同梱をやめる" && git push -u origin HEAD');
 } else {
   paths.push(".ja-proofread.json");
   const ignored = paths.filter((p) => git(["check-ignore", "-q", "--", p]).status === 0);
   console.log("\nコミットするパス：" + paths.join(" "));
   if (ignored.length) console.log("注意：" + ignored.join(" ") + " は .gitignore で除かれています。.gitignore を直すか、git add -f で足してください");
-  console.log("コミットしてプッシュする例：\n  cd " + q(target) + " && git add " + paths.join(" ") + ' && git commit -m "ja-proofread v' + VERSION + ' を同梱" && git push');
+  console.log("コミットしてプッシュする例：\n  cd " + q(target) + " && git add " + paths.join(" ") + ' && git commit -m "ja-proofread を同梱" && git push -u origin HEAD');
   console.log("プッシュしたら、新しいセッションを始めてください。起動のときの依存の準備（SessionStart のフック）と書いた直後の校正は、新しいセッションから動きます。");
 }
 `;
@@ -179,7 +187,9 @@ const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(imp
 if (isMain) {
   const args = process.argv.slice(2);
   const outIdx = args.indexOf("--out");
-  const { version, files, buf } = buildSetup();
+  let built;
+  try { built = buildSetup(); } catch (e) { console.error(e.message); process.exit(1); }
+  const { version, files, buf } = built;
   const sha = sha256(buf);
   if (args.includes("--check")) {
     const problems = [];

@@ -9,7 +9,7 @@
 //   node install-into-project.mjs <プロジェクトのディレクトリ>            同梱する（やり直すと最新版で入れ替える）
 //   node install-into-project.mjs <プロジェクトのディレクトリ> --remove   同梱をやめる
 import { cpSync, mkdirSync, readFileSync, writeFileSync, existsSync, rmSync, rmdirSync, readdirSync, copyFileSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { join, resolve, relative } from "node:path";
 import { ROOT, readJSON } from "./lib.mjs";
 
 const target = process.argv[2] && resolve(process.argv[2]);
@@ -135,7 +135,8 @@ if (remove) {
 // 1. 本体（スクリプト・ルール・台帳・設定・テンプレート）
 mkdirSync(vendorDir, { recursive: true });
 for (const d of ["scripts", "rules", "config", "data", "templates", ".claude-plugin"]) {
-  cpSync(join(ROOT, d), join(vendorDir, d), { recursive: true });
+  // build-setup.mjs（dist の一式を作るスクリプト）は、同梱先では使わないので入れない
+  cpSync(join(ROOT, d), join(vendorDir, d), { recursive: true, filter: (src) => relative(ROOT, src) !== join("scripts", "build-setup.mjs") });
 }
 for (const f of ["package.json", "package-lock.json"]) if (existsSync(join(ROOT, f))) cpSync(join(ROOT, f), join(vendorDir, f));
 
@@ -202,4 +203,4 @@ console.log(`ja-proofread v${v} を ${target} に同梱しました。
 - フック: .claude/settings.json（SessionStart で依存を入れ、Write/Edit の後に校正${bakNote}）
 - 設定: .ja-proofread.json
 コミットするパス：.claude/ja-proofread .claude/skills/ja-proofread-* .claude/agents/ja-proofread-* .claude/settings.json .ja-proofread.json
-（${hasBak ? "settings.json.bak はコミットしません。" : ""}Notion の場所も入るので、公開リポジトリや社外と共有するリポジトリには同梱しないでください）`);
+（${hasBak ? "settings.json.bak はコミットしません。" : ""}同梱先のリポジトリに Notion の候補一覧の場所が載ります。候補一覧の中身は Notion の共有設定で守られますが、場所を知られたくないリポジトリ（公開リポジトリや社外と共有するリポジトリなど）には同梱しないでください）`);
